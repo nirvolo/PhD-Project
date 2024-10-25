@@ -1,0 +1,30 @@
+"0","# ggplot(data = midw_cnty_dat, mapping = aes(x = long, y = lat)) +"
+"0","#   geom_sf()"
+"0","#   #geom_polygon(color=""black"")"
+"0",""
+"0","#install.packages(""rnaturalearthdata"")"
+"0","library(rnaturalearthdata)"
+"2","
+Attaching package: ‘rnaturalearthdata’
+
+"
+"2","The following object is masked from ‘package:rnaturalearth’:
+
+    countries110
+
+"
+"0","# Obtaining the county data for the midwest states"
+"0","midw_county_poly = counties(state = c(""Kansas"", ""Illinois"", ""Indiana"", ""Iowa"", ""Missouri""), cb = TRUE)"
+"2","Retrieving data for the year 2020
+"
+"2","Using FIPS code '20' for state 'Kansas'
+"
+"2","Using FIPS code '17' for state 'Illinois'
+"
+"2","Using FIPS code '18' for state 'Indiana'
+"
+"2","Using FIPS code '19' for state 'Iowa'
+"
+"2","Using FIPS code '29' for state 'Missouri'
+"
+"0","ggplot(data = midw_county_poly) + geom_sf()"

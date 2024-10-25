@@ -1,0 +1,7 @@
+"0","# Plotting the minimum temp curves over all years for the last 9 counties"
+"0","par(mfrow = c(3,3))"
+"0","for(cnty in unique(temp_df$county)[76:84]){"
+"0","  yrs = dim(temp_df[temp_df$county == cnty,])[1]/365"
+"0","  max_df = matrix(data = c(temp_df[temp_df$county == cnty,]$TMIN), nrow = 365, ncol = yrs)"
+"0","  matplot(max_df, type = ""l"", col = 1:yrs, lty = 1, xlab = ""day"", ylab = ""min temp"", main = cnty)"
+"0","}"

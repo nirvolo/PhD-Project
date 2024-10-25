@@ -1,0 +1,3 @@
+"0","matplot(matrix(data = c(temp_df[temp_df$county == ""trego"",]$TMAX), "
+"0","        nrow = 365, ncol = dim(temp_df[temp_df$county == ""allen"",])[1]/365), "
+"0","        type = ""l"", col = 1:yrs, lty = 1, xlab = ""day"", ylab = ""max temp"", main = ""trego"")"

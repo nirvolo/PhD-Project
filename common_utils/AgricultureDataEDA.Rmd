@@ -1,0 +1,392 @@
+---
+title: "Agriculture Data Analysis"
+output: pdf_document
+date: "2022-09-19"
+---
+Data Preprocessing
+```{r}
+### **Need to load in console** ###
+#load("Data_Extraction_cleaning/Rdatafiles/structured_corn.RData") # name is environment is regdat
+corn = regdat
+```
+
+```{r}
+# The temperature data for all years.
+temp = na.omit(fundat)
+temp[,"county"] = rep(NA, dim(temp)[1])
+years = unique(temp$Year)
+# Adding the county names to the temp data
+for(yr in years){
+  reg_yr = corn[corn$Year==yr,]
+  for(i in 1:length(reg_yr$CountyI)){
+    id = reg_yr$CountyI[i]
+    name = reg_yr$County[i]
+    temp$county[temp$Year == yr & temp$CountyI == id] = name 
+  }
+}
+
+# After adding the county column, there are still 115,340 rows with NA values
+# for county. This is because the number of counties in corn is not equivalent
+# to the number of counties in temp even after removing the NA values.
+#table(temp$county, useNA = "always")
+# Removing the NA values from temp
+temp_df = na.omit(temp)
+#table(temp_df$county, useNA = "always")
+# Changing the county names to lower case
+temp_df$county = sapply(temp_df$county, FUN = tolower)
+
+# Adding the centroids for each county
+temp_df[,c("long","lat")] = matrix(0, nrow = dim(temp_df)[1], ncol = 2)
+for(cnty in unique(temp_df$county)){
+  center = kns_cent[tolower(kns_cent$county) == cnty,c("long","lat")]
+  temp_df[temp_df$county == cnty, c("long","lat")] = center
+}
+
+# Also adding the centroids to corn
+corn = data.frame(corn)
+corn$County = sapply(corn$County, FUN = tolower)
+corn[,c("long","lat")] = matrix(0, nrow = dim(corn)[1], ncol = 2)
+for(cnty in unique(corn$County)){
+  corn[corn$County == cnty,c("long","lat")] = kns_cent[tolower(kns_cent$county) == cnty ,c("long","lat")]
+}
+```
+
+
+```{r}
+##### Working only with 1999 data #####
+# Counties included in 1999
+reg99 = corn[corn$Year == 1999,]
+fun99 = na.omit(fundat[fundat$Year == 1999,])
+
+# Adding the name of county for obs in fundat_99
+fun99$county = rep(NA, dim(fun99)[1])
+head(fun99)
+for(i in 1:length(reg99$CountyI)){
+  id = reg99$CountyI[i]
+  name = reg99$County[i]
+  fun99$county[fun99$CountyI == id] = name
+}
+# There are 16 counties that aren't in reg99 which is why
+# there are still some NA's
+# table(fun99$county, useNA = "always")
+# Removing the rows with NA from fun99
+fun99_new = na.omit(fun99) 
+```
+
+*Exploratory Data Analysis*
+
+```{r}
+# Plotting the temperature curves for a few counties
+days = c(1:365)
+par(mfrow = c(3,3))
+for(cnty in unique(fun99_new$county)[1:9]){
+  min_temp = min(fun99_new$TMIN[fun99_new$county == cnty])
+  max_temp = max(fun99_new$TMAX[fun99_new$county == cnty])
+  plot(days, fun99_new$TMIN[fun99_new$county == cnty], type = 'l', ylab = "Temperature", 
+       ylim = c(min_temp, max_temp), main = cnty)
+  lines(days, fun99_new$TMAX[fun99_new$county == cnty], col = "blue")
+}
+```
+
+```{r}
+par(mfrow = c(3,3))
+for(cnty in unique(fun99_new$county)[62:70]){
+  min_temp = min(fun99_new$TMIN[fun99_new$county == cnty])
+  max_temp = max(fun99_new$TMAX[fun99_new$county == cnty])
+  plot(days, fun99_new$TMIN[fun99_new$county == cnty], type = 'l', ylab = "Temperature", 
+       ylim = c(min_temp, max_temp), main = cnty)
+  lines(days, fun99_new$TMAX[fun99_new$county == cnty], col = "blue")
+}
+```
+
+
+As we would expect, there is a similar pattern for all counties weather. The maximum for both curves occurs after around day 200 which is summer time. Similarly, the minimum occurs around day 1-10 which is January, the middle of winter. There seems to be a sinusoidal pattern for each of the curves. To get a better understanding of this, we can take a closer look at some of the plots individually.
+
+```{r}
+# County 1
+plot(days, fun99_new$TMIN[fun99_new$county == "allen"], type = 'l', xlab = "day", ylab = "temperature (C)", 
+       ylim = c(min(fun99_new$TMIN[fun99_new$county == "allen"]), max(fun99_new$TMAX[fun99_new$county == "allen"])),
+       main = "ALLEN")
+lines(days, fun99_new$TMAX[fun99_new$county == "allen"], col = "blue")
+legend( x = "topright",
+        legend = c("Min Temp","Max Temp"),
+        col = c("black","blue"), lwd=1, lty=c(1,1), cex = 1)
+```
+
+There is a sine/cosine trend for each of the curves with a period of about 4-8 days. An interesting feature of these curves is how frequently the min and max temperature changes. The min and max temperature fluctuates up and down pretty consistently every couple of days during all seasons. 
+
+```{r}
+# Atchison County
+plot(days, fun99_new$TMIN[fun99_new$county == "atchison"], type = 'l', ylab = "Temperature", 
+       ylim = c(min(fun99_new$TMIN[fun99_new$county == "atchison"]), max(fun99_new$TMAX[fun99_new$county == "atchison"])),
+       main = "ATCHISON")
+lines(days, fun99_new$TMAX[fun99_new$county == "atchison"], col = "blue")
+
+```
+
+Atchison county has a similar pattern to Allen county but what's very noticeable in this plot is the frequency of the curve is higher. Here the period of the curve is somewhere around 2-4 days which is almost half of the previous county.
+
+```{r}
+# Cowley County 
+plot(days, fun99_new$TMIN[fun99_new$county == "cowley"], type = 'l', ylab = "Temperature", 
+       ylim = c(min(fun99_new$TMIN[fun99_new$county == "cowley"]), max(fun99_new$TMAX[fun99_new$county == "cowley"])),
+       main = "COWLEY")
+lines(days, fun99_new$TMAX[fun99_new$county == "cowley"], col = "blue")
+```
+
+
+Similar to Allen and Atchison counties, also has a high frequency for both the min and the max temperature curves. 
+
+What's common to all these curves is there is a lot of variation over a time frame of a couple days. This is pretty interesting considering this is happening during the same season's. Maybe this is a feature that's specific to some counties in Kansas or 1999 was just an anomaly since the majority of places in the world don't have so much fluctuation during the same season (over the time frame of a few days). We can also see that there is an underlying function for each of these temperature curves which confirms that treating the underlying data structure as a function is valid.
+
+We can construct boxplots to compare the spread of the data for different counties.
+
+
+```{r}
+# boxplot of the minimum temperatures
+boxplot(TMIN ~ county, data = fun99_new[fun99_new$CountyI <= 18,], ylab = 'Min Temp', xlab = "County", main = "Min Temp vs. County")
+```
+
+
+The spread of the data for the min temp is similar for the counties above. The main difference is the smallest min temp and the greatest min temp. There are no outliers based on the plot. The shape of the distribution is somewhere between symmetric to left-skewed. 
+
+```{r}
+# boxplot of the maximum temperatures
+boxplot(TMAX ~ county, data = fun99_new[fun99_new$CountyI <= 18,], ylab = 'Max Temp', xlab = "County", main = "Max Temp vs. County")
+```
+The spread of the data for all counties is pretty similar other than the lower and upper fence of the respective counties. There are outliers for some of the counties which is a distinguishing feature not seen in the box plots for the minimum temperatures. Looking at the box plot of all counties, it seems that there are significantly more outliers for the maximum temp than for the minimum temp. Interestingly though, the outliers are on the lower end of the box plot meaning they are occuring during the winter time. This could be because there was a really cold winter that year in Kansas but would be interesting to see if this applies to other years in the data. 
+```{r}
+boxplot(TMIN ~ CountyI, data = fun99_new, ylab = 'Min Temp', xlab = "County", main = "Min Temp vs. County")
+boxplot(TMAX ~ CountyI, data = fun99_new, ylab = 'Min Temp', xlab = "County", main = "Max Temp vs. County")
+
+```
+
+```{r}
+# Histogram of avg precipitation
+hist(reg99$avgPRCP, xlab = "average precipitation", main = "Average Precipitation")
+
+boxplot(reg99$avgPRCP)
+```
+
+The distribution of precipitation is approximately right skewed with the mean around 2 inches. 
+
+```{r}
+# Summary statistics of a few counties temperature
+stat_min = matrix(data = NA,nrow = 6, ncol = 9)
+stat_max = matrix(data = NA,nrow = 6, ncol = 9)
+for(i in 1:9){
+  id = unique(fun99_new$CountyI)[i]
+  stat_min[,i] = summary(fun99_new[fun99_new$CountyI == id, c("TMIN")])
+  stat_max[,i] = summary(fun99_new[fun99_new$CountyI == id, c("TMAX")])
+}
+```
+Pretty similar statistics across all counties which verifies what we saw in the boxplots. 
+
+```{r}
+# Calculating the variance 
+var_min = rep(0, 9)
+var_max = rep(0, 9)
+for(i in 1:9){
+  id = unique(fun99_new$CountyI)[i]
+  var_min[i] = var(fun99_new[fun99_new$CountyI == id, c("TMIN")])
+  var_max[i] = var(fun99_new[fun99_new$CountyI == id, c("TMAX")])
+}
+```
+There's more variation for the maximum temperatures as opposed to the minimum temperatures. There are differences among counties but for the most part the variance's are pretty close instead of 1-2 outliers. This verifies what we saw in the boxplots. 
+
+```{r}
+# Histogram of the crop yield
+hist(reg99$Yield)
+```
+
+```{r}
+boxplot(reg99$Yield)
+```
+
+```{r}
+# Not sure if this is meaningful but plotting the mean min/max temp against the avg crop yield for
+# a few counties
+min_avg = rep(0, length(unique(fun99_new$county)))
+max_avg = rep(0, length(unique(fun99_new$county)))
+for(i in 1:length(unique(fun99_new$CountyI))){
+  id = unique(fun99_new$CountyI)[i]
+  min_avg[i] = mean(fun99_new$TMIN[fun99_new$CountyI == id])
+  max_avg[i] = mean(fun99_new$TMAX[fun99_new$CountyI == id])
+}
+
+# The average crop yield for 74 counties
+yield = reg99$Yield[reg99$CountyI]
+
+# Plot of yield vs. min_avg
+par(mfrow = c(1,2))
+plot(min_avg, yield)
+plot(max_avg, yield)
+```
+No apparent pattern for these two plots. Could argue that the yield vs. min temp approximately follows a positive linear trend but there's a lot of data points that are scattered throughout. For yield vs. max temp, there is no trend in the data, data is scattered across all values of yield as the max temp increases. This is probably not very informative because I took the average of the min and max temps over the course of the year. In addition, the yield can depend more on the number of farms in the county rather than only the weather. 
+
+```{r}
+# Plot of yield vs. precipitation
+plot(reg99$avgPRCP, yield, xlab = "precipitation", main = "Yield vs. Precipitation")
+```
+Even though this plot includes all counties, there does seem to be an approximate negative linear relationship between yield and average precipitation. This plot gives us some evidence that it is reasonable to include precipitation in the model. Since the yield is the average crop yield per acre for a given year, this comparison makes more sense. 
+
+**Plots using the entire data set**
+
+```{r}
+# Plot of the maximum temperature curves over a few years for the first 9 counties
+par(mfrow = c(3,3))
+for(cnty in unique(temp_df$county)[1:9]){
+  yrs = dim(temp_df[temp_df$county == cnty,])[1]/365
+  #print(yrs)
+  max_df = matrix(data = c(temp_df[temp_df$county == cnty,]$TMAX), nrow = 365, ncol = yrs)
+  matplot(max_df, type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "max temp", main = cnty)
+}
+```
+
+```{r}
+# Same kind of plot as above just for the last 9 counties
+par(mfrow = c(3,3))
+for(cnty in unique(temp_df$county)[76:84]){
+  yrs = dim(temp_df[temp_df$county == cnty,])[1]/365
+  max_df = matrix(data = c(temp_df[temp_df$county == cnty,]$TMAX), nrow = 365, ncol = yrs)
+  matplot(max_df, type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "max temp", main = cnty)
+}
+```
+
+```{r}
+# Some of the individual plots over all years
+# Allen county
+matplot(matrix(data = c(temp_df[temp_df$county == "allen",]$TMAX), 
+        nrow = 365, ncol = dim(temp_df[temp_df$county == "allen",])[1]/365), 
+        type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "max temp", main = "allen")
+```
+
+```{r}
+matplot(matrix(data = c(temp_df[temp_df$county == "trego",]$TMAX), 
+        nrow = 365, ncol = dim(temp_df[temp_df$county == "allen",])[1]/365), 
+        type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "max temp", main = "trego")
+```
+
+
+```{r}
+# Wilson county
+matplot(matrix(data = c(temp_df[temp_df$county == "wilson",]$TMAX), 
+        nrow = 365, ncol = dim(temp_df[temp_df$county == "wilson",])[1]/365), 
+        type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "max temp", main = "wilson")
+```
+
+```{r}
+# Plotting the minimum temp curves over all years for the first 9 counties
+par(mfrow = c(3,3))
+for(cnty in unique(temp_df$county)[1:9]){
+  yrs = dim(temp_df[temp_df$county == cnty,])[1]/365
+  max_df = matrix(data = c(temp_df[temp_df$county == cnty,]$TMIN), nrow = 365, ncol = yrs)
+  matplot(max_df, type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "min temp", main = cnty)
+}
+```
+
+```{r}
+# Plotting the minimum temp curves over all years for the last 9 counties
+par(mfrow = c(3,3))
+for(cnty in unique(temp_df$county)[76:84]){
+  yrs = dim(temp_df[temp_df$county == cnty,])[1]/365
+  max_df = matrix(data = c(temp_df[temp_df$county == cnty,]$TMIN), nrow = 365, ncol = yrs)
+  matplot(max_df, type = "l", col = 1:yrs, lty = 1, xlab = "day", ylab = "min temp", main = cnty)
+}
+```
+
+```{r}
+# Randomly picking 50 curve trajectories from all counties and years
+set.seed(112922)
+pairs = matrix(0, nrow = 1, ncol = 2)
+while(dim(pairs)[1] <= 50){
+  yr = sample(unique(temp_df$Year),size = 1)
+  cnty = sample(unique(temp_df$county),size = 1)
+  # I added the row c(0,0) since if there is only one pair 
+  # in py it treats it as a vector and then when indexing 
+  # py[,2], it doesn't work since this is for matrices. So
+  # that the command py[,2] works, we default py to always
+  # be a matrix.
+  py = rbind(c(0, 0), pairs[pairs[,1] == yr,])
+  if (!(cnty %in% py[,2]) & length(corn$County[corn$Year == yr & corn$County == cnty]) > 0){
+    pairs = rbind(pairs,c(yr,cnty))
+  }
+}
+
+# Removing the first row of pairs since it is (0,0)
+pairs = pairs[-1,]
+```
+
+```{r}
+# Plot of 50 minimum temperature curves
+par(mfrow = c(1, 1))
+mean_min = rep(0, 365)
+plot(NA, xlim = c(1,365), ylim = c(min(temp_df$TMIN),max(temp_df$TMAX)), xlab = "day", ylab = "temperature (C)", 
+     main = "Minimum Temperature") 
+for(i in 1:dim(pairs)[1]){
+  yr = pairs[i,1]
+  cnty = pairs[i,2]
+  min_temp = temp_df[temp_df$Year == yr & temp_df$county == cnty,]$TMIN
+  mean_min = mean_min + min_temp
+  lines(min_temp)
+}
+mean_min = mean_min/49
+lines(mean_min, col="red")
+```
+
+```{r}
+# Plot of 50 maximum temperature curves
+par(mfrow = c(1, 1))
+plot(NA, xlim = c(1,365), ylim = c(min(temp_df$TMIN),max(temp_df$TMAX)), xlab = "day", ylab = "temperature (C)",
+     main = "Maximum Temperature")
+mean_max = rep(0, 365)
+for(i in 1:dim(pairs)[1]){
+  yr = pairs[i,1]
+  cnty = pairs[i,2]
+  max_temp = temp_df[temp_df$Year == yr & temp_df$county == cnty,]$TMAX
+  if (length(max_temp) < 365) print(c(yr, cnty))
+  #print(length(max_temp))
+  mean_max = mean_max + max_temp
+  lines(max_temp)
+}
+mean_max = mean_max/49
+lines(mean_max, col="red")
+```
+
+
+**Creating a plot for the average yield per year using the new Midwest data**
+
+
+```{r}
+### **Need to run in console** ###
+# load("Data_Extraction_cleaning/Rdatafiles/RawMidwestFundatPreProc_incl_irrig.RData")
+# load("Data_Extraction_cleaning/Rdatafiles/RawMidwestRegdatPreProc_incl_irrig.RData")
+
+####### Calculating the average yield per year for Midwest #######
+midw_avg_yield_per_year = c()
+unq_yrs = sort(unique(midw_regdat_new$Year))
+for(i in 1:length(unq_yrs)){
+  yr = unq_yrs[i]
+  midw_avg_yield_per_year[i] = mean(midw_regdat_new[midw_regdat_new$Year == yr, "Yield"])
+}
+
+midw_avg_yield_df = data.frame(matrix(c(unq_yrs,midw_avg_yield_per_year), nrow = 21, ncol = 2))
+colnames(midw_avg_yield_df) = c("Year","AverageYield")
+ggplot(data = midw_avg_yield_df, mapping = aes(x = Year, y = AverageYield)) + 
+  geom_point() + geom_line() + xlab("Year") + ylab("Average Yield") + xlim(c(1999,2020))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

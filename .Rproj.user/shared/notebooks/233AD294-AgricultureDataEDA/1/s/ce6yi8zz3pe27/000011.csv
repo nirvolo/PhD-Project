@@ -1,0 +1,3 @@
+"0","### **Need to load in console** ###"
+"0","#load(""Data_Extraction_cleaning/Rdatafiles/structured_corn.RData"") # name is environment is regdat"
+"0","corn = regdat"

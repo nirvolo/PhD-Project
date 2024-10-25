@@ -1,0 +1,60 @@
+#################################### Final Results for Midwest Data SVFQM 9 ITERS ######################################
+NUM_ITERS = 9
+fld_lim = 5
+# Creating a matrix with the quantile and percent variation
+# for each model and quantile. For example, 1st row, corresponds
+# to tau = 0.25, SVFQM and optimal percentage
+midw_smooth_params = matrix(0, nrow = 1, ncol = 3)
+midw_smooth_params[,1] = c(0.75)
+midw_smooth_params[,2] = c(0.55)
+midw_smooth_params[,3] = c(0.0015) # optimal lambda
+midw_mods = c("SVFQM")
+midw_final_svfqm_res = list()
+##for(i in 1:nrow(midw_smooth_params)){
+for(i in 1:1){
+  tau = midw_smooth_params[i,1]
+  perc_var = midw_smooth_params[i,2]
+  mod = midw_mods[i]
+  lambda = midw_smooth_params[i,3]
+  cat("The current model is", mod, "\n")
+  cat("  The value of tau is", tau, "\n")
+  cat("    The current percentage of variance is", perc_var, "\n")
+  # Organizing the matrices to store the train and test MSE for each percentage
+  ag_data_mse = data.frame(matrix(0, nr = 45, nc = 2))
+  colnames(ag_data_mse) = c("train QEP", "test QEP")
+  if(mod == "SVFQM"){
+    comp_mod = F
+    svfqm = T
+  } else{
+    comp_mod = T
+    svfqm = F
+  }
+  
+  for(k in 1:NUM_ITERS){
+    midw_qr_res_otpt = ag.data_qr(fundat_all = midw_fd_new, nonfd = midw_regdat_new, thresh = perc_var, n_fold = 5, iter = k, deg = 3,
+                                  DE_MEAN_RESP = T, pred_vars = c("avgPRCP","irrig_prop"), reval = c(0,1), fld_lim = fld_lim, tau = tau,
+                                  spat_triang = midw_scl_tri, comp_mod = comp_mod, svfqm = svfqm, lambda_seq = c(lambda,5))
+    # Updating SVFQM results
+    if(svfqm){
+      ag_data_mse[((k-1)*5 + 1):(5*k),1] = midw_qr_res_otpt$svqfm$train_QEP
+      ag_data_mse[((k-1)*5 + 1):(5*k),2] = midw_qr_res_otpt$svqfm$test_QEP
+    } else{
+      # Updating FQR results
+      ag_data_mse[((k-1)*5 + 1):(5*k),1] = midw_qr_res_otpt$fqr$train_QEP
+      ag_data_mse[((k-1)*5 + 1):(5*k),2] = midw_qr_res_otpt$fqr$test_QEP
+    }
+  }
+  # Updating the results for the corresponding combination of model, tau, and perc var
+  midw_final_svfqm_res[[i]] = ag_data_mse
+}
+
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/QuantileRegression/MidwestResults")
+date = format(Sys.time(), "%m-%d-%Y")
+#Saving SVFQM results
+file_name = paste("FINAL_9ITERS_UpdtLambda_Midw_SVFQM_tau0.75_OptScores_", date, ".RData", sep = "")
+save(midw_final_svfqm_res, file = file_name)
+
+
+apply(abs(midw_final_svfqm_res[[1]]),2,mean)
+
+

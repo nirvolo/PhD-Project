@@ -1,0 +1,105 @@
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/QuantileRegression/CoreFunctions")
+source("agriculture_data_quantreg.R")
+
+# The min and max of the longitude will be used to split the Midwest 
+# into 4 regions.
+summary(midw_regdat_new[,c("long")])
+# Min. 1st Qu.  Median    Mean 3rd Qu.    Max. 
+# -8.377  -1.609   1.121   1.242   4.543   8.504 
+# Creating a sequence for distinct boundaries
+seq(-8.377, 8.504, length.out = 5)
+# -8.37700 -4.15675  0.06350  4.28375  8.50400
+
+midw_qr_four_regions = ag.data_qr(fundat_all = midw_fd_new, nonfd = midw_regdat_new, thresh = 0.60, n_fold = 5, iter = 1, deg = 3, DE_MEAN_RESP = T,
+                                       pred_vars = c("avgPRCP","irrig_prop"), reval = c(0,1), fld_lim = 5, tau = 0.25, spat_triang = midw_scl_tri,
+                                       comp_mod = T, svfqm = T, lambda_seq = c(0.025,1))
+apply(abs(midw_qr_four_regions$svqfm$svfqm_test_qep_regions),2,mean)
+apply(abs(midw_qr_four_regions$fqr$fqr_test_qep_regions),2,mean)
+
+
+# Running 3 iterations for each model to obtain the QEP for the regions
+NUM_ITERS = 3
+fld_lim = 5
+# Creating a matrix with the quantile and percent variation
+# for each model and quantile. For example, 1st row, corresponds
+# to tau = 0.25, SVFQM and optimal percentage
+midw_smooth_params = matrix(0, nrow = 6, ncol = 3)
+midw_smooth_params[,1] = c(0.25,0.25,0.50,0.50,0.75,0.75) # the quantile value
+midw_smooth_params[,2] = c(0.60,0.15,0.95,0.80,0.55,0.90) # optimal variance percentage
+midw_smooth_params[,3] = c(0.025,0,0.01,0,0.0015,0) # optimal lambda
+midw_mods = c("SVFQM","FQR","SVFQM","FQR","SVFQM","FQR")
+midw_four_regions_results = list()
+for(i in 1:nrow(midw_smooth_params)){
+  tau = midw_smooth_params[i,1]
+  perc_var = midw_smooth_params[i,2]
+  mod = midw_mods[i]
+  lambda = midw_smooth_params[i,3]
+  cat("The current model is", mod, "\n")
+  cat("  The value of tau is", tau, "\n")
+  cat("    The current percentage of variance is", perc_var, "\n")
+  # Organizing the matrices to store the train and test MSE for each percentage
+  # 15 folds, 4 regions per fold
+  qep_mat = data.frame(matrix(0, nr = 15, nc = 4))
+  if(mod == "SVFQM"){
+    comp_mod = F
+    svfqm = T
+  } else{
+    comp_mod = T
+    svfqm = F
+  }
+  
+  for(k in 1:NUM_ITERS){
+    midw_qr_res_otpt = ag.data_qr(fundat_all = midw_fd_new, nonfd = midw_regdat_new, thresh = perc_var, n_fold = 5, iter = k, deg = 3,
+                                  DE_MEAN_RESP = T, pred_vars = c("avgPRCP","irrig_prop"), reval = c(0,1), fld_lim = fld_lim, tau = tau,
+                                  spat_triang = midw_scl_tri, comp_mod = comp_mod, svfqm = svfqm, lambda_seq = c(lambda,5))
+    if(svfqm){
+      # Updating SVFQM results
+      qep_mat[((k-1)*5 + 1):(5*k),] = midw_qr_res_otpt$svqfm$svfqm_test_qep_regions
+    } else{
+      # Updating FQR results
+      qep_mat[((k-1)*5 + 1):(5*k),] = midw_qr_res_otpt$fqr$fqr_test_qep_regions
+    }
+  }
+  # Updating the results for the corresponding combination of model, tau, and perc var
+  midw_four_regions_results[[i]] = qep_mat
+}
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/QuantileRegression/MidwestResults")
+date = format(Sys.time(), "%m-%d-%Y")
+file_name = paste("Midw_SVFQM_FQR_FourRegions_Results", date, ".RData", QEP = "")
+save(midw_four_regions_results, file = file_name)
+
+
+midw_four_regions_results[[1]]
+
+apply(abs(midw_four_regions_results[[1]]),2,mean)
+apply(abs(midw_four_regions_results[[2]]),2,mean)
+
+apply(abs(midw_four_regions_results[[3]]),2,mean)
+apply(abs(midw_four_regions_results[[4]]),2,mean)
+
+apply(abs(midw_four_regions_results[[5]]),2,mean)
+apply(abs(midw_four_regions_results[[6]]),2,mean)
+
+midw_four_regions_tau0.25 = cbind(c(as.matrix(midw_four_regions_results[[1]])), c(as.matrix(midw_four_regions_results[[2]])))
+colnames(midw_four_regions_tau0.25) = c("SVFQM","FQR")
+boxplot(midw_four_regions_tau0.25)
+
+midw_four_regions_tau0.5 = cbind(c(as.matrix(midw_four_regions_results[[3]])), c(as.matrix(midw_four_regions_results[[4]])))
+colnames(midw_four_regions_tau0.5) = c("SVFQM","FQR")
+boxplot(midw_four_regions_tau0.5)
+
+midw_four_regions_tau0.75 = cbind(c(as.matrix(midw_four_regions_results[[5]])), c(as.matrix(midw_four_regions_results[[6]])))
+colnames(midw_four_regions_tau0.75) = c("SVFQM","FQR")
+boxplot(midw_four_regions_tau0.75)
+
+
+
+
+
+
+midw_four_regions_tau0.5
+
+
+
+
+

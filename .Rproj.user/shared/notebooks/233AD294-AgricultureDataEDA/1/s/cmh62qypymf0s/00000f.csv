@@ -1,0 +1,8 @@
+"0","# Summary statistics of a few counties temperature"
+"0","stat_min = matrix(data = NA,nrow = 6, ncol = 9)"
+"0","stat_max = matrix(data = NA,nrow = 6, ncol = 9)"
+"0","for(i in 1:9){"
+"0","  id = unique(fun99_new$CountyI)[i]"
+"0","  stat_min[,i] = summary(fun99_new[fun99_new$CountyI == id, c(""TMIN"")])"
+"0","  stat_max[,i] = summary(fun99_new[fun99_new$CountyI == id, c(""TMAX"")])"
+"0","}"

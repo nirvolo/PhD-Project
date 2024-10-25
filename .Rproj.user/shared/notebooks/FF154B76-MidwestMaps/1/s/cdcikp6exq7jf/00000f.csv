@@ -1,0 +1,8 @@
+"0","rmv_vec = c()"
+"0","idx = 1"
+"0","for(i in 1:nrow(midwest)){"
+"0","  v = which(midwest$long == midwest[i,]$long & midwest$lat == midwest[i,]$lat)"
+"0","  #if (length(v) > 1) print(v)"
+"0","  if (length(v) > 1) midwest <- midwest[-v,]"
+"0","  #if (length(v) > 1) print(nrow(midwest))"
+"0","}"

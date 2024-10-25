@@ -1,0 +1,7 @@
+"0","# Creating a matrix "
+"0","midw_new = midw[!(-90 <= midw$long & midw$long < -84.95 & 36 <= midw$lat & midw$lat < 38.8),]"
+"0","midw_new_2 = midw_new[!(-96.5 < midw_new$long & midw_new$long < -95 & 40.1 < midw_new$lat & midw_new$lat < 43.5),]"
+"0","ggplot(data = midw[-c(2:22,24:64,66:67,69:80,82:107, 109:111,113:137, 139:148, 150:172,174:272,274:301,303:323,325:343,345:355,357:378,380:385,387:394,396:426,428:472,474:514,516:555,557:574,576:584,586:592),], mapping = aes(x = long, y = lat)) + "
+"0","  coord_fixed(1.3) + geom_polygon(col = ""black"", fill = NA) + geom_point(data = midw_cent_df, mapping = aes(x = midw_cent_df[,""X1""], "
+"0","                                                                                                            y = midw_cent_df[,""X2""]), cex = 0.8) + "
+"0","  geom_point(data = midw[c(585,593),], mapping = aes(x = long, y = lat), col = ""red"")"

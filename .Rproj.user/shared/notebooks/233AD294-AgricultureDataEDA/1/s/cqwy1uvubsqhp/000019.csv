@@ -1,0 +1,2 @@
+"0","mean_max = mean_max/49"
+"0","lines(mean_max, col=""red"")"

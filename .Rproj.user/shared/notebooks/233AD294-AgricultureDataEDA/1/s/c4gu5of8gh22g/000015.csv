@@ -1,0 +1,4 @@
+"0","# County 1"
+"0","plot(days, fun99_new$TMIN[fun99_new$county == ""allen""], type = 'l', xlab = ""day"", ylab = ""temperature (C)"", "
+"0","       ylim = c(min(fun99_new$TMIN[fun99_new$county == ""allen""]), max(fun99_new$TMAX[fun99_new$county == ""allen""])),"
+"0","       main = ""ALLEN"")"

@@ -1,0 +1,269 @@
+---
+title: "Midwest Data Maps"
+output: html_document
+date: "2023-08-10"
+---
+```{r}
+library(ggplot2)
+library(raster)
+library(RColorBrewer)
+library(ggplot2)
+library(classInt)
+library(rnaturalearth)
+library(sf)
+library(rgdal)
+library(rgeos)
+library(tigris)
+library(maps)
+library(Triangulation)
+```
+
+```{r}
+state = map_data("state")
+# Illinois, Indiana, Iowa, Kansas, and Missouri: polygon data for states
+midwest = state[state$region %in% c("kansas", "missouri", "iowa", "illinois", "indiana"),]
+unique(midwest$region)
+### Organizing the centroid data so that I can add the midw counties to the midwest map below
+midw_cnty = counties(c("Kansas", "Missouri", "Iowa", "Illinois", "Indiana"), cb = T)
+# This is the polygon data for counties in the US
+cnty = map_data("county")
+midw_cnty_poly = cnty[cnty$region %in% c("kansas", "missouri", "iowa", "illinois", "indiana"),]
+### Finding the centroids
+midw_cent = st_centroid(st_geometry(midw_cnty))
+midw_cent_df = data.frame(matrix(data = NA, nrow = length(midw_cent), ncol = 2))
+for(i in 1:length(midw_cent)){
+  midw_cent_df[i,] = midw_cent[[i]]
+}
+# Adding the group and state variable to the centroids
+midw_cent_df[,"group"] = 0
+midw_cent_df[,"state"] = midw_cnty$STATE_NAME
+midw_st_group_code = matrix(c("Illinois", 12, "Kansas", 15, "Iowa", 14, "Missouri", 27, "Indiana", 13), nrow = 5, ncol = 2, byrow = T)
+for(st in unique(midw_cent_df$state)){
+  print(st)
+  print(midw_st_group_code[midw_st_group_code[,1] == st, 2])
+  midw_cent_df[midw_cent_df$state == st,"group"] = midw_st_group_code[midw_st_group_code[,1] == st, 2]
+}
+colnames(midw_cent_df) = c("long","lat","group","state")
+##### Creating a plot of the Midwest spatial domain with coresponding counties 
+ggplot(data = midwest, mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + 
+  geom_polygon(color="black", fill="gray") + 
+  geom_polygon(data=midw_cnty_poly, fill=NA, color="white") + 
+  geom_point(data = midw_cent_df, aes(long, lat), col = "red", size = 0.5) + 
+  #ggtitle('Midwest Region with Counties') + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(),
+        axis.title.y=element_blank(), axis.text.y=element_blank(), axis.ticks.y=element_blank())
+```
+
+
+
+
+
+
+
+
+
+```{r}
+ggplot(data = midwest[1:220,], mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + 
+  geom_polygon(color="black", fill="gray")
+```
+
+```{r}
+rmv_vec = c()
+idx = 1
+for(i in 1:nrow(midwest)){
+  v = which(midwest$long == midwest[i,]$long & midwest$lat == midwest[i,]$lat)
+  #if (length(v) > 1) print(v)
+  if (length(v) > 1) midwest <- midwest[-v,]
+  #if (length(v) > 1) print(nrow(midwest))
+}
+```
+
+```{r}
+rmv_vec = c()
+idx = 1
+unq_locs = unique(midwest[,c("long","lat")])
+for(i in 1:nrow(unq_locs)){
+  v = which(midwest$long == unq_locs[i,]$long & midwest$lat == unq_locs[i,]$lat)
+  if (length(v) > 1) {
+    rmv_vec[idx:(idx+length(v)-1)] = v
+    idx = idx + length(v)
+  } 
+}
+print(length(rmv_vec))
+
+midwest_ = midwest[-rmv_vec,]
+```
+
+```{r}
+ggplot(data = midwest_, mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + 
+  geom_polygon(color="black", fill="gray")
+
+```
+
+
+```{r}
+
+
+midwest_2 = midwest_[c(1:26, 71:253, 27:70, 254:nrow(midwest_)),]
+ggplot(data = midwest_2, mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + 
+  geom_polygon(color="black", fill="gray")
+
+```
+
+
+```{r}
+midwest_
+unique(midwest_$region)
+```
+
+
+```{r}
+#insert
+#-87.49065 41.71706 to -88.00059 37.79230
+#-88.04642 37.76365
+
+# For illinois I want it to go up until -87.55368	41.75143. Then go from -87.49065 41.71706 for indiana up until it gets to -86.79164	37.98137
+#
+# 
+which(round(midwest_$long, digits = 5) == -87.55368 & round(midwest_$lat, digits = 5) == 41.75143)
+which(round(midwest_$long, digits = 5) == -87.49065 & round(midwest_$lat, digits = 5) == 41.71706)
+which(round(midwest_$long, digits = 5) == -86.79164 & round(midwest_$lat, digits = 5) == 37.98137)
+
+
+midwest_2 = midwest_[c(1:27, 71:255, 28:70,256:450),]#, 28:70, 255:nrow(midwest_)),]
+ggplot(data = midwest_2[1:300,], mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + 
+  geom_polygon(color="black", fill="gray")
+
+```
+
+```{r}
+##################################################################################################
+# NEW CODE THAT GIVES ME THE BORDER FOR THE MIDWEST STATES
+##################################################################################################
+state = map_data("state")
+# Illinois, Indiana, Iowa, Kansas, and Missouri
+midwest = state[state$region %in% c("kansas", "missouri", "iowa", "illinois", "indiana"),]
+
+kansas <- state[state$region %in% c("kansas"),]
+missouri <- state[state$region %in% c("missouri"),]
+iowa <- state[state$region %in% c("iowa"),]
+illinois <- state[state$region %in% c("illinois"),]
+indiana <- state[state$region %in% c("indiana"),]
+
+# Target plot
+midw <- rbind(missouri[c(137:247),], kansas[c(1:61),], missouri[c(300:315),], iowa[c(122:256, 1:20),],
+             illinois[c(1:29),], indiana[c(72:257),], illinois[c(110:144),])
+# midwest = counties("Kansas", cb = TRUE)
+# # Calculating the centroids of the Kansas counties based on the data object kansas
+# centroids = st_centroid(st_geometry(kansas))
+# The centroids for the midwest states
+midw_cnty = counties(c("Kansas", "Missouri", "Iowa", "Illinois", "Indiana"), cb = T)
+midw_cent = st_centroid(st_geometry(midw_cnty))
+midw_cent_df = data.frame(matrix(data = NA, nrow = length(midw_cent), ncol = 2))
+
+for(i in 1:length(midw_cent)){
+  midw_cent_df[i,] = midw_cent[[i]]
+}
+
+ggplot(data = midw, mapping = aes(x = long, y = lat)) + coord_fixed(1.3) + geom_path() + geom_point(data = midw_cent_df, mapping = aes(x = midw_cent_df[,"X1"], y = midw_cent_df[,"X2"]), cex = 0.8)
+  # 
+#   annotate("text", x=-94.63544, y=37.02453, label= "KS1Mis247", col='red') +
+#   annotate("text", x=-95.34018, y=40.02110, label= "KS61Mis300", col='red') +
+#   annotate("text", x=-90.89976, y=42.69109, label= "Iow20", col='red') +
+#   annotate("text", x=-91.22634, y=43.49895, label= "Iow1,256", col='red') +
+#   annotate("text", x=-95.76416, y=40.60552, label= "Iow122", col='red') +
+#   annotate("text", x=-90.64192, y=42.50774, label= "Ill1", col='red') +
+#   annotate("text", x=-88.02351, y=37.79230, label= "Ind1", col='red') +
+#   annotate("text", x=-87.94329, y=38.25639, label= "Ind20", col='red') +
+#   annotate("text", x=-87.53076, y=40.47374, label= "Ind65", col='red') +
+#   annotate("text", x=-87.52503, y=41.29307, label= "Ind70", col='red') +
+#   annotate("text", x=-84.80348, y=40.99513, label= "Ind100", col='red')
+# REMOVED "group = group" so different segments of same state will not be drawn consecutively
+#geom_polygon(color="black", fill="gray")  # CHANGED _polygon to _path to avoid closing the loop in drawing
+```
+```{r}
+which(midw$long > -90 & midw$lat < 38.8)
+midw[593,]
+min(midw[-90 < midw$long & midw$long < -84.95 & 36 < midw$lat & midw$lat < 38.8,]$long)
+which(round(midw$long,5) == -89.96583)
+midw[63:66,]
+midw[593,]
+dim(midw)
+```
+
+
+```{r}
+# Creating a matrix 
+midw_new = midw[!(-90 <= midw$long & midw$long < -84.95 & 36 <= midw$lat & midw$lat < 38.8),]
+midw_new_2 = midw_new[!(-96.5 < midw_new$long & midw_new$long < -95 & 40.1 < midw_new$lat & midw_new$lat < 43.5),]
+ggplot(data = midw[-c(2:22,24:64,66:67,69:80,82:107, 109:111,113:137, 139:148, 150:172,174:272,274:301,303:323,325:343,345:355,357:378,380:385,387:394,396:426,428:472,474:514,516:555,557:574,576:584,586:592),], mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + geom_polygon(col = "black", fill = NA) + geom_point(data = midw_cent_df, mapping = aes(x = midw_cent_df[,"X1"], 
+                                                                                                            y = midw_cent_df[,"X2"]), cex = 0.8) + 
+  geom_point(data = midw[c(585,593),], mapping = aes(x = long, y = lat), col = "red")
+# ggplot(data = midw[-c(429:500,502:555,557:574,576:592,2:22,24:64,66:67,69:80,82:107, 109:111,113:137, 139:148, 150:172,174:272,274:301,303:323,),], mapping = aes(x = long, y = lat)) + 
+#   coord_fixed(1.3) + geom_polygon(col = "black", fill = NA) + geom_point(data = midw_cent_df, mapping = aes(x = midw_cent_df[,"X1"], 
+#                                                                                                             y = midw_cent_df[,"X2"]), cex = 0.8) + 
+#   geom_point(data = midw[c(324,344),], mapping = aes(x = long, y = lat), col = "red")
+  #annotate("text", x=-88.49906	, y=37.08183, label= "KS1Mis576", col='red') +
+  #annotate("text", x=-89.17515	, y=37.00161, label= "KS1Mis593", col='red') 
+```
+
+```{r}
+# The midwest dataset with the boundaries fixed to accommodate triangulations
+midw_sub = midw[-c(2:22,24:64,66:67,69:80,82:107, 109:111,113:137, 139:148, 150:172,174:272,274:301,303:323,325:343,345:355,357:378,380:385,387:394,396:426,428:472,474:514,516:555,557:574,576:584,586:592),]
+ggplot(data = midw_sub, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + geom_polygon(col = "black", fill = NA) + geom_point(data = midw_cent_df, 
+  mapping = aes(x = midw_cent_df[,"X1"], y = midw_cent_df[,"X2"]), cex = 0.8) 
+ggplot(data = midw_sub, mapping = aes(x = long, y = lat)) + 
+  coord_fixed(1.3) + geom_polygon(col = "black", fill = NA) + geom_point(data = midw_cent_df, 
+  mapping = aes(x = midw_cent_df[,"X1"], y = midw_cent_df[,"X2"]), cex = 0.8) +
+  geom_point(data = midw_sub, mapping = aes(x = long, y = lat), col = "red")
+```
+
+
+
+
+
+
+
+
+
+```{r}
+which(midw_sub$long > -90 & midw_sub$lat < 38.8)
+midw_sub
+midw_sub[1,]
+midw_sub[-1,]
+```
+
+```{r}
+##### Below is just experimentation ########
+# midw_tri = TriMesh(Pt = midw_sub[-c(2,4,24),c("long","lat")], n = 5)
+# TriMesh(Pt = midw_sub[-c(2,4,24),c("long","lat")], n = 5)
+# points(midw_sub[-c(2,4,24),"long"],midw_sub[-c(2,4,24),"lat"], pch = 20, cex = 0.6, col = "red")
+# points(midw_cent_df[,"X1"],midw_cent_df[,"X2"], col = "red", pch = 20, cex = 0.6)
+################## Expremination ends ########
+
+# The above line changed to the next line because it has points outside the boundary which
+# causes a warning when calculating the Bernstein polynomial basis functions for the spatial domain. 
+midw_tri = TriMesh(midw_sub[,c("long","lat")], n = 5)
+#save(midw_tri, file = "MidwestTriangulation.RData")
+#load("MidwestTriangulation.RData")
+TriMesh(Pt = midw_sub[,c("long","lat")], n = 5)
+#points(midw_sub[c(24),"long"],midw_sub[c(24),"lat"], pch = 20, cex = 0.6, col = "blue")
+points(midw_cent_df[,"X1"],midw_cent_df[,"X2"], col = "red", pch = 20, cex = 0.6)
+```
+
+
+
+
+
+
+
+
+
+

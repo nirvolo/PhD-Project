@@ -1,0 +1,3 @@
+"0","fun99 = na.omit(fundat[fundat$Year == 1999,])"
+"0",""
+"0","head(fun99)"

@@ -1,0 +1,1 @@
+"0","boxplot(TMIN ~ CountyI, data = fun99_new, ylab = 'Min Temp', xlab = ""County"", main = ""Min Temp vs. County"")"

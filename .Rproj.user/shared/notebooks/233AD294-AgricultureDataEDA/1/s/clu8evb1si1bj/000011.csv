@@ -1,0 +1,2 @@
+"0","# boxplot of the minimum temperatures"
+"0","boxplot(TMIN ~ county, data = fun99_new[fun99_new$CountyI <= 18,], ylab = 'Min Temp', xlab = ""County"", main = ""Min Temp vs. County"")"

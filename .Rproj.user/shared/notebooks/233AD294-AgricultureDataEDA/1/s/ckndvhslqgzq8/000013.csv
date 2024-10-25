@@ -1,0 +1,2 @@
+"0","# Histogram of avg precipitation"
+"0","hist(reg99$avgPRCP, xlab = ""average precipitation"", main = ""Average Precipitation"")"

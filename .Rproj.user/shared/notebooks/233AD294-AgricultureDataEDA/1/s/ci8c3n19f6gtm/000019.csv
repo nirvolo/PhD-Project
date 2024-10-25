@@ -1,0 +1,2 @@
+"0","mean_min = mean_min/49"
+"0","lines(mean_min, col=""red"")"

@@ -1,0 +1,2 @@
+"0","# Plot of yield vs. precipitation"
+"0","plot(reg99$avgPRCP, yield, xlab = ""precipitation"", main = ""Yield vs. Precipitation"")"

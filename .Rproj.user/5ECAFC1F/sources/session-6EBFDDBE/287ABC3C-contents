@@ -1,0 +1,179 @@
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/SpatiallyVaryingFunctionalModel_Coding(NewVersion)/Main Functions/")
+source("preprocessing_function.R")
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/QuantileRegression/CoreFunctions")
+source("TrainFxnQuantReg.R")
+source("TestFxnQuantReg.R")
+source("predict.svqfm.R")
+source("ModelCompQR.R")
+source("rq.pen.cv.fxn.R")
+source("workHorse.R")
+setwd("/Users/nirvoloshin/Documents/StatsResearch/Coding/SpatiallyVaryingFunctionalModel_Coding(NewVersion)/Main Functions/")
+#source_rmd("MapsDemo.Rmd") # scl_locs is in this file
+
+
+ag.data_qr = function(fundat_all, nonfd, n_fold, thresh = 0.8, iter = 1, deg = 3, 
+                                      DE_MEAN_RESP = T, pred_vars, reval, log.lam = c(-15.5,5), fld_lim = 5, nharm = NULL,
+                                      tau, pnlty_fxn = "Ridge", model_comp = F, models = c("svqfm","fqr"), spat_triang, sim = F, nlam = 10,
+                                      comp_mod = F, algo = "br", tmpmax_pars = c(1e5, -12.1, 2.35), svfqm = T,  lambda_seq = NULL){
+  # fundat_all: raw functional data after preprocessing but without smoothing, not an fd objects list
+  #             Contains functional data for county/years that are not in nonfd - these are at the end of fundat_all
+  set.seed(12876+iter*123)
+  cat("starting", n_fold, "folds iteration", iter, "\n")
+  cat("=========================================", "\n")
+  # Percentage of data to use for training
+  ratio = 1 - (1/n_fold)
+
+  # Vector to store the train MSE, test MSPE
+  svqfm_train_mse = c() # I only calculate the MSE for training
+  svqfm_mspe = c()
+  fqr_train_mse = c()
+  fqr_test_mse = c()
+  svfqm_test_qep_regions = matrix(0,nrow = fld_lim, ncol = 4)
+  fqr_test_qep_regions = matrix(0,nrow = fld_lim, ncol = 4)
+  #for(fld in 1:n_fold){
+  for(fld in 1:fld_lim){
+    #for(fld in 1:1){
+    cat("Fold", fld, "\n")
+    cat('------------', "\n")
+    
+    tst_ids = c()
+    # Vector to store cnty ids that have less than a certain number of years
+    excl_cnty_ids = c()
+    for(cnty_id in unique(nonfd$CountyI)){  
+      n_obs = nrow(nonfd[nonfd$CountyI == cnty_id,])
+      # Not including counties that have less than 8 years of data
+      if(n_obs < 5){ 
+        #cat("yes",cnty_id,"\n") 
+        excl_cnty_ids = append(excl_cnty_ids, cnty_id)
+        next
+      }
+    
+      # Number of training and testing observations for this county
+      n_train = floor(ratio*n_obs)
+      n_test = n_obs - n_train
+      # The train and test indices for the current county
+      # In each fold we will get a different set of indices for training with slight
+      # probability for repetition.
+      trn_inds = sample(1:n_obs, n_train)
+      tst_inds = (1:n_obs)[-trn_inds]
+      tst_ids = append(tst_ids, nonfd[nonfd$CountyI == cnty_id,][tst_inds,]$Id)  # Add obs Id to tst_ids
+    } # end of for loop for counties  
+    
+    ########## Organizing the non-functional data ##############
+    # The nonfd data for the current county and window
+    nonfd_test = nonfd[nonfd$Id %in% tst_ids,]
+    #cat("number of rows in test", nrow(nonfd_test))
+    tst_fd = fundat_all[fundat_all$Id %in% tst_ids,]
+    #cat("Number of test obs is ", nrow(nonfd_test), "\n")
+    # Excluding the counties that have less than 5 years of data in the training data 
+    # so that there isn't a possibility of including counties with one year of data
+    nonfd_train = nonfd[!nonfd$Id %in% tst_ids,]
+    nonfd_train = nonfd_train[!nonfd_train$CountyI %in% excl_cnty_ids,]
+    #cat("number of rows in train", nrow(nonfd_train))
+    trn_fd = fundat_all[!fundat_all$Id %in% tst_ids,]
+    trn_fd = trn_fd[!trn_fd$CountyI %in% excl_cnty_ids,]
+    
+    # default values for min_max_opt_lambda in fd_smooth_2steps_trn_tst is NULL
+    # so it will find optimal values from training set
+    #cat("dim of train fd is ", nrow(trn_fd)/365, "\n")
+    #cat("dim of train nonfd", nrow(nonfd_train), "\n")
+    smoothed_trn_fd = fd_smooth_2steps_trn_tst(trn_fd, n_obs = dim(trn_fd)[1]/365, reval = reval, llam.lims = log.lam)
+    min_opt_lam = smoothed_trn_fd$min_opt_lambda
+    max_opt_lam = smoothed_trn_fd$max_opt_lambda
+    comb_trn_fd_lst = smoothed_trn_fd$comb_fd
+    # Using the optimal lambdas found in training set to smooth test set
+    #cat("The dimension of train fd is", dim(trn_fd)[1])
+    #print(dim(trn_fd)[1]/365)
+    smoothed_tst_fd = fd_smooth_2steps_trn_tst(tst_fd, n_obs = dim(trn_fd)[1]/365, min_opt_lamb = min_opt_lam, max_opt_lamb = max_opt_lam, 
+                                               reval = reval, llam.lims = log.lam)
+    comb_tst_fd_lst = smoothed_tst_fd$comb_fd
+    
+    # Changing the column names of nonfd train and test
+    colnames(nonfd_train) = colnames(nonfd)
+    colnames(nonfd_test) = colnames(nonfd)
+    
+    ### Centering the yield data by the mean by year ###
+    # Add column yld_mean_per_yr to train_nonfd
+    nonfd_train$yld_mean_per_yr = ave(nonfd_train$Yield, nonfd_train$Year)
+    # add De-Meaned column to train
+    nonfd_train$de_meaned_Yield = nonfd_train$Yield - nonfd_train$yld_mean_per_yr
+    # Add yld_mean_per_yr to nonfd_test
+    nonfd_test$yld_mean_per_yr = NA
+    for (yr in unique(nonfd_test$Year)){
+      nonfd_test[nonfd_test$Year == yr,]$yld_mean_per_yr = unique(nonfd_train[nonfd_train$Year == yr,]$yld_mean_per_yr)
+    }
+    # Add column for De-meaned Yield in nonfd_test
+    nonfd_test$de_meaned_Yield = nonfd_test$Yield - nonfd_test$yld_mean_per_yr
+    
+    ########################## Model Fitting ########################## 
+    # Creating list to store the results for each respective model 
+    model_res = list()
+    
+    ###### Fitting the SVFQM model ############
+    #cat("The dimension of train_nonfd before training function is,",dim(na.omit(nonfd_train)),"\n")
+    if(svfqm){
+      train_mod = train_fxn_qr(train_fd = comb_trn_fd_lst, train_nonfd = na.omit(nonfd_train), full_fd = fundat_all,
+                               thresh = thresh, use_full_fd4mean = F, d = deg, DE_MEAN_RESP = DE_MEAN_RESP, pred_vars = pred_vars,
+                               nharm = nharm, tau = tau, pnlty = pnlty_fxn, n_lam = nlam, sim = sim, spat_tri = spat_triang, lam_seq =  lambda_seq)
+      # train_mod = train_fxn_qr_nopnlty(train_fd = comb_trn_fd_lst, train_nonfd = na.omit(nonfd_train), full_fd = fundat_all,
+      #                          thresh = thresh, use_full_fd4mean = F, d = deg, DE_MEAN_RESP = DE_MEAN_RESP, pred_vars = pred_vars,
+      #                          nharm = nharm, pnlty = pnlty_fxn, n_lam = nlam, sim = sim, spat_tri = spat_triang, algo = algo,
+      #                          tmpmax_pars = tmpmax_pars, tau_val = tau)
+      # Storing the training MSE for each fold
+      svqfm_train_mse[fld] = train_mod$train_mse
+      cat("   The SVQFM train prediction error for the current fold is", train_mod$train_mse, "\n")
+      test_res = test_fxn_qr(test_fd = comb_tst_fd_lst, test_nonfd = na.omit(nonfd_test), cnty_means = train_mod$cnty_means, train_mod$fpca_obj,
+                             train_mod$svfm_fit, num_harm = train_mod$num_used_harm, DE_MEAN_RESP = DE_MEAN_RESP,
+                             pred_vars = pred_vars, spline_coefs = train_mod$spline_coefs, train_Q2 = train_mod$train_Q2, sim = sim,
+                             triang = spat_triang, tau = tau)
+      # test_res = test_fxn_qr_nopnlty(comb_tst_fd_lst, na.omit(nonfd_test), train_mod$cnty_means, train_mod$fpca_obj,
+      #                        train_mod$svfm_fit, num_harm = train_mod$num_used_harm, DE_MEAN_RESP = DE_MEAN_RESP,
+      #                        pred_vars = pred_vars, spline_coefs = train_mod$spline_coefs, train_Q2 = train_mod$train_Q2, sim = sim,
+      #                        triang = spat_triang, tau_val = tau, d = deg)
+      svqfm_mspe[fld] = test_res$test_MSE
+      cat("   The SVQFM test prediction error for the current fold is", test_res$test_MSE, "\n")
+      svfqm_test_qep_regions[fld,] = test_res$test_qep_regions
+      cat("     SVFQM QEP 4 Regions:", svfqm_test_qep_regions[fld,], "\n")
+      # Storing the results for the SVQFM
+      # Storing the number of harmonics. I only need to do this once at the end of the folds since that same number of
+      # harmonics is used for all folds.
+      svfm_num_harm = train_mod$num_used_harm
+      model_res[["svqfm"]] = list("train_QEP" = svqfm_train_mse, "test_QEP" = svqfm_mspe, "Xstar" = train_mod$Xstar, "num_used_harm" = train_mod$num_used_harm,
+                                  "y_diff_train" = train_mod$y_diff_train, "train_yhat" = train_mod$train_yhat, "train_fit" = train_mod$train_fit,
+                                  "spline_coefs" = train_mod$spline_coefs, "train_etas" = train_mod$train_etas, "svfqm_test_qep_regions" = svfqm_test_qep_regions)
+    }
+    
+    ##### Model Comparison #######
+    if(comp_mod){
+      qr_mod = model_comp_qr(train.lst_fd = comb_trn_fd_lst, test.lst_fd = comb_tst_fd_lst, nonfd.train = nonfd_train, nonfd.test = nonfd_test, 
+                             fpca_thresh = thresh, num_harm = nharm, sim = sim, tau_val = tau, pred_vars = pred_vars, DE_MEAN_RESP = DE_MEAN_RESP, algo = algo)
+      # Storing the FQR MSE in a vector
+      fqr_train_mse[fld] = qr_mod$train_mse
+      fqr_test_mse[fld] = qr_mod$test_mse
+      fqr_test_qep_regions[fld,] = qr_mod$test_qep_regions
+      cat("       The FQR train prediction error for the current fold is", qr_mod$train_mse, "\n")
+      cat("       The FQR test prediction error for the current fold is", qr_mod$test_mse, "\n")
+      cat("          FQR QEP 4 Regions:", fqr_test_qep_regions[fld,], "\n")
+      # Storing the FQR results in a list
+      model_res[["fqr"]] = list("train_QEP" = fqr_train_mse, "test_QEP" = fqr_test_mse, "num_used_harm" = qr_mod$num_used_harm, "y_diff_train" = qr_mod$y_diff_train,
+                                "y_diff_test" = qr_mod$y_diff_test, "train_fit" = qr_mod$train_fit, "fqr_test_qep_regions" = fqr_test_qep_regions)
+    }
+    
+  } # End of for loop for folds
+  
+  return(model_res)
+}
+
+
+sep = function(true_y, pred_y, tau = 0.5){
+  num_pred = length(pred_y)
+  sum_y_great_est = sum(true_y > pred_y)
+  sep_num = (sum_y_great_est/num_pred) - (1-tau)
+  #sep_denom = sqrt((tau*(1-tau))/num_pred)
+  #sep_est = sep_num/sep_denom
+  return(sep_num)
+}
+
+
+
+

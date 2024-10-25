@@ -1,0 +1,8 @@
+"0","##### Working only with 1999 data #####"
+"0","# Counties included in 1999"
+"0","reg99 = corn[corn$Year == 1999,]"
+"0","fun99 = na.omit(fundat[fundat$Year == 1999,])"
+"0",""
+"0","# Adding the name of county for obs in fundat_99"
+"0","fun99$county = rep(NA, dim(fun99)[1])"
+"0","head(fun99)"

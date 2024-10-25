@@ -1,0 +1,788 @@
+# install.packages("quantreg")
+# install.packages("rqPen")
+# install.packages("hqreg")
+# install.packges("expm")
+# install.packages("data.table")
+library(quantreg)
+library(rqPen)
+library(hqreg) # the package hqreg contains the function "hqreg_raw"
+# this package is for the sqrtm function. If I don't run this, uses another sqrtm from a different package
+# and it gives a numeric issue and recipricol condition number
+library(expm) 
+library(data.table) # this package is used by rqPen but the rqPen package doesn't load it for some reason
+
+
+
+
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+
+train_fxn_qr = function(train_fd, train_nonfd, full_fd, use_full_fd4mean = F, sim = F,
+                           nharm = NULL, thresh = 0.80, d = 3, r = 1, 
+                           spat_tri, cntr_fxns = F, DE_MEAN_RESP = T, pred_vars,
+                           true_quant = NULL, tau, pnlty = "Ridge", n_lam = 10, train = T, scl = T, tmpmax_pars, algo = "br",lam_seq = NULL){
+  if (length(tau) > 1) stop ("Error - for this function you must use a single tau value")
+  # This function takes train_fd objects that contains county/year for which there is no data in nonfd
+  # it uses all of it to find principal components, but take the scores and do training only on those that exist
+  # in nonfd. The observations for county/year that are not in nonfd data would have $county NULL
+  # sp_locs: All locations in the spatial domain
+  # train: this variable is for predicting the quantiles which is necessary since calculation is different 
+  # for train and test
+  
+  ###### Calculate the location-specific means of the training data #######
+  fd_cntyIds = c()
+  for (i in 1:length(train_fd)){  # iterate over counties in train fd
+    fd_cntyIds = append(fd_cntyIds, train_fd[[i]]$CountyI)
+  }
+  
+  train_fd_countiesId = unique(fd_cntyIds)
+  
+  if(!sim){
+    train_counties = unique(train_nonfd$county)
+    #print(c("dim nonfd", dim(train_nonfd)))
+    #print(c("num fd unique countyIds", length(train_fd_countiesId), "num nonfd counties", length(train_counties)))
+  }
+  
+  n_knots = nrow(train_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  # Creating matrices to store the county means for the min and max temperatures
+  # so that they can be used for the testing data later on.
+  min.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  max.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  # Setting the names of the columns to the counties
+  colnames(min.mean_mat) = train_fd_countiesId
+  colnames(max.mean_mat) = train_fd_countiesId
+  
+  if(!sim){
+    # Centering each county's coefficients by their means
+    for(i in 1:length(train_fd)){
+      train_cnty_data = train_fd[[i]] # the ith county data
+      #print(summary(train_fd[[i]]$coefs[,,1]))
+      train_cntyId = train_cnty_data$CountyI
+      # calculating the row means for the temperature which is the mean for each
+      # of the spline coefficients
+      cnty_min.mean = apply(train_cnty_data$coefs[,,1], 1, mean)
+      cnty_max.mean = apply(train_cnty_data$coefs[,,2], 1, mean)
+      # Centering the spline coefficients by their location-specific mean
+      train_fd[[i]]$coefs[,,1] = train_cnty_data$coefs[,,1] - cnty_min.mean
+      train_fd[[i]]$coefs[,,2] = train_cnty_data$coefs[,,2] - cnty_max.mean
+      # Adding the means to the matrix
+      min.mean_mat[,as.character(train_cntyId)] = cnty_min.mean
+      max.mean_mat[,as.character(train_cntyId)] = cnty_max.mean
+    }
+  }
+
+  # Creating a list to store the min and max mean matrices
+  cnty_means = list()
+  cnty_means[[1]] = min.mean_mat
+  cnty_means[[2]] = max.mean_mat
+  
+  # Creating matrices to store the min and max coefficients.
+  # Initializing the matrix by adding the first counties coefficients
+  min.temp_mat = train_fd[[1]]$coefs[,,1]  # after demean
+  max.temp_mat = train_fd[[1]]$coefs[,,2]
+  # Each column of coefs matrix correspond to a year in this county
+  # Use the list of years to exclude to later omit these columns from the scores
+  # given to fit.gsvcm. For each element of the list, take the exld indices
+  # and keep the number of columns in min_temp_mat so far and use to shift the
+  # indices of the next list to exlude
+  if(!sim){
+    exld_scores = train_fd[[1]]$excld_yrs_frm_trn
+    shift_by = ncol(min.temp_mat)
+  }
+  
+  for(j in 2:length(train_fd_countiesId)){
+    min.temp_mat = cbind(min.temp_mat, train_fd[[j]]$coefs[,,1])
+    max.temp_mat = cbind(max.temp_mat, train_fd[[j]]$coefs[,,2])
+    if(!sim){
+      exld_scores = append(exld_scores, (train_fd[[j]]$excld_yrs_frm_trn + shift_by))
+      shift_by = ncol(min.temp_mat)
+    }
+  }
+  #cat("The number of excluded scores is", length(exld_scores), "\n")
+  #print(c("dim min.temp_mat for all fd", dim(min.temp_mat)))
+  ##### Combining the data from ALL counties for FPCA #####
+  comb_arry = array(dim = c(n_knots, dim(min.temp_mat)[2], 2))
+  # Adding the matrices to the array
+  comb_arry[,,1] = min.temp_mat
+  comb_arry[,,2] = max.temp_mat
+  # Creating the fd object that will be used in the FPCA
+  fd_basis_fxns = train_fd[[1]]$basis # the basis fxns are the same for all counties
+  joint_fd_obj = fd(comb_arry, fd_basis_fxns) # creates the "fd" object using the array of coefficients and basis functions.
+  
+  ##### Perform FPCA with the training data ####
+  # Joint FPCA of the smoothed functional data X1 and X2. Since the data is already centered
+  # above, I need to tell the joint.fpca function not to center the data which is why centerfns = F.
+  fpca_train = joint.fpca(joint_fd_obj, nharm = nharm, thresh = thresh, centerfns = cntr_fxns, simulation = sim)
+
+  #cat("The of the dimension of the scores is:",dim(fpca_train$pc_scores),"\n")
+  if(!sim){
+    # Including an if statement to check if there are excluding scores. 
+    # If the length(exld_scores) == 0, then the command below returns an empty matrix.
+    if(length(exld_scores) > 0){
+      # The if statement is to account for the case where there is only 1 FPC score so the scores is a vector not a matrix
+      if(is.null(dim(fpca_train$pc_scores))) fpc.scores_train = fpca_train$pc_scores[-exld_scores]
+      else fpc.scores_train = fpca_train$pc_scores[-exld_scores,]  # Exclude scores for obs with no nonfd data
+    } else{
+      fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+    }
+  } else{
+    fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+  }
+  
+  # The first condition is only for the case where I give the function a set
+  # number of harmonics, 0,1,2,3..... Otherwise it'll select the nharm based
+  # on the number of columns in fpc.scores_train. The default for nharm is null,
+  # only gets an argument when I don't want to use threshold.
+  if(!is.null(nharm)){
+    num_used_harm = nharm
+  } else if(is.null(ncol(fpc.scores_train))){
+    #print("num scores is 1") 
+    num_used_harm = 1
+  } else{
+    #print("I've entered ncol")
+    num_used_harm = ncol(fpc.scores_train)
+  }
+  
+  #cat("The number of harmonics used is", num_used_harm,"\n")
+  
+  ######## Calculating the penalty matrix Omega for the model fitting using its square root decomposition ###########
+  train_basis_full = basis(spat_tri$V, spat_tri$Tr, d = d, r = r, as.matrix(train_nonfd[,c("long","lat")]))
+  Q2_mat = train_basis_full$Q2
+  B_mat = train_basis_full$B
+  # Adding a check for dimensions 
+  if(ncol(B_mat) != nrow(Q2_mat)) print("ERROR: dim of B is not the same as dim of Q2")
+  Bstar_mat = B_mat%*%Q2_mat
+  K_mat = train_basis_full$K
+  if(nrow(Q2_mat) != nrow(K_mat)) print("ERROR: dim of B is not the same as dim of Q2")
+  omega_pnlty = t(Q2_mat)%*%K_mat%*%Q2_mat
+  # To make sure  we use the correct sqrtm function
+  my_sqrtm <- expm::sqrtm
+  # Changing type to numeric since sqrtm returns complex numbers but in my case it's equivalent to integers
+  #omega_sqrt = my_sqrtm(omega_pnlty)
+  omega_sqrt = matrix(as.numeric(my_sqrtm(omega_pnlty)), nr = nrow(omega_pnlty), nc = ncol(omega_pnlty))
+  if(!(max(abs(omega_sqrt%*%omega_sqrt - omega_pnlty)) < 1e-7)) print("ERROR: Square root of Omega is wrong")
+  # Checking if the transpose of omega_sqrt is equal to itself
+  if(!(max(abs(omega_sqrt - t(omega_sqrt))) < 1e-7)) print("ERROR: Omega not equal Omega^T")
+  omega_sqrt_inv = solve(omega_sqrt, tol = 1e-21)
+  if(!(max(abs(omega_sqrt_inv%*%omega_sqrt - diag(1, nrow = nrow(omega_sqrt), ncol = ncol(omega_sqrt)))) < 1e-7)){
+    print(max(abs(omega_sqrt_inv%*%omega_sqrt - diag(1, nrow = nrow(omega_sqrt), ncol = ncol(omega_sqrt)))))
+    print("ERROR: Inverse of Square Root of Omega is incorrect")
+  }
+  #### Trying to use Cholesky decomposition for the penalty matrix omega instead of sqrt ####
+  #cat("Testing if pos. semi-definite", is.positive.semi.definite(as.matrix(omega_pnlty), tol = 1e-20))
+  # chol_mat_pnlty = as.matrix(chol(omega_pnlty, pivot = TRUE)) # pivot is since matrix is pos. semi-definite
+  # print(chol_mat_pnlty)
+  # cat("Is omega_pnlty symmetric?", zapsmall(omega_pnlty) == zapsmall(t(omega_pnlty)), "|n")
+  # print(attr(chol_mat_pnlty, "pivot"))
+  # pivot = attr(chol_mat_pnlty, "pivot")
+  # cat("The pivot vector is", pivot, "\n")
+  # # Redefining the cholesky matrix using the pivot variable
+  # chol_mat_pnlty_new = chol_mat_pnlty[,order(pivot)]
+  # # Inverse of the cholesky matrix
+  # chol_mat_pnlty_inv = solve(chol_mat_pnlty_new, tol = 1.17e-20)
+  # 
+  #### Organizing the data ####
+  # Adding an if condition for simulation since the variable names are different
+  if(!sim){
+    # Organizing the scalar data and the pc scores into one matrix
+    # Adding an if statement to check the number of harmonics. If it's zero, don't include the fpc scores in train_pred
+    if(!is.null(nharm)){ 
+      if(nharm == 0) train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars]))
+      # The else to account for when nharm is greater than 0 but not NULL
+      else train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars], fpc.scores_train))
+    } else{
+      train_pred = as.matrix(cbind(1, train_nonfd[,pred_vars], fpc.scores_train)) # the data for the model
+    }
+    # the response variable
+    if (!DE_MEAN_RESP) train_resp = train_nonfd[,c("Yield")]
+    else train_resp = train_nonfd[,c("de_meaned_Yield")]
+    # Calculating the reparametrized data matrix using the penalty matrix Omega.
+    # For the rq.pen.cv function, the data matrix type is required to be a numeric matrix.
+    X_tilda = as.matrix(kr(train_pred,as.matrix(Bstar_mat)%*%omega_sqrt_inv, byrow = T))
+  } else{
+    # for simulated data
+    train_pred = as.matrix(cbind(1,train_nonfd[,c("z")], fpc.scores_train))
+    # the response variable
+    train_resp = train_nonfd[,c("y")]
+    # Calculating the reparametrized data matrix using the penalty matrix Omega
+    X_tilda = as.matrix(kr(train_pred,as.matrix(Bstar_mat)%*%omega_sqrt_inv, byrow = T))
+  }
+  
+  ###### Fit the Quantile Regression Model using the predictor variables above ######
+  # intrcpt is set to FALSE here so that the transformation of the coefficients is done correctly
+  train_fit = rq.pen.cv_new(X_tilda, train_resp, penalty = pnlty, nlambda = n_lam, tau = tau, scalex = scl, intrcpt = F, lambda = lam_seq)
+  # Obtaining the lambda index corresponding to the lambda that minimimizes the CV error
+  min_cv_lam_ind = train_fit$btr$lambdaIndex
+  # Extracting the training coefficients. The first index corresponds to acccessing the list
+  # and the second is the coefs. The reason for this is because the model fit is labeled
+  # by "tau0.5a" where 0.5 is the quantile and this will change so not general enough for other values.
+  train_coefs = train_fit$fit$models[[1]][[1]][,min_cv_lam_ind]
+  ##############################################
+  
+  
+  ##### Testing Xtilda without a penalty and intrcpt = F ####
+  # train_fit = rq.pen_new(X_tilda, train_resp, penalty = pnlty, tau = tau, scalex = scl, lambda = c(0,0.5), intrcpt = F)
+  # train_coefs = train_fit$models[[1]][[1]][,1] # 1st col corresponds to lambda = 0
+  ##############################################
+  
+  ##### Testing Xtilda with the rq function ####
+  # sX <- as.matrix.csr(X_tilda)
+  # p = ncol(X_tilda)
+  # # original equation for tempmax: 1e5 + exp(-12.1)*(sX@ia[p+1]-1)^2.35
+  # #train_fit = rq(y ~ 0 + ., data = train_pred, tau = tau, method = algo)
+  # # tmpmax <- floor(tmpmax_pars[1] + exp(tmpmax_pars[2])*(sX@ia[p+1]-1)^tmpmax_pars[3])
+  # tmpmax <- floor(tmpmax_pars[1] + exp(tmpmax_pars[2])*(sX@ia[length(sX@ia)]-1)^tmpmax_pars[3])
+  # train_fit = rq(train_resp ~ 0 + ., data = data.frame(X_tilda), tau = tau, method = "sfn", control = list(tmpmax = tmpmax))
+  # train_coefs = coef(train_fit)
+  ##############################################
+  # Calculate the coefficient matrix
+  nr_omega = nrow(omega_sqrt_inv)
+  # Using Cholesky matrix
+  #nr_omega = nrow(chol_mat_pnlty_inv)
+  n_coefs = length(train_coefs)
+  theta_tilda = matrix(train_coefs, nr = nr_omega, nc = n_coefs/nr_omega)
+  if(ncol(omega_sqrt_inv) != nrow(theta_tilda)) print("ERROR") 
+  theta_mat = omega_sqrt_inv%*%theta_tilda
+  #cat("The dim of theta_mat is", dim(theta_mat), "\n")
+  # Calculating the predicted quantiles
+  # train_yhat = predict_svqfm(spline_coefs = theta_mat, Xpred = train_pred,
+  #                       triang = spat_tri, B = B_mat, Q2 = Q2_mat, train = train)
+  pred_otpt = predict_svqfm(spline_coefs = theta_mat, Xpred = train_pred,
+                            triang = spat_tri, B = B_mat, Q2 = Q2_mat, train = train)
+  train_yhat = pred_otpt$yhat
+  train_est_etas = pred_otpt$eta
+  
+  # Calculating the train MSE which compares the estimated quantiles y_hat to the true.
+  # This is only the case for simulations, otherwise calculate the MSE using the check loss
+  # function
+  if(!sim){
+    # Estimating the training quantiles for real data
+    # cat("train_yhat is", train_yhat, "\n")
+    # cat("train_resp is", train_resp, "\n")
+    # cat("resp > hat", train_resp > train_yhat, "\n")
+    # cat("sum resp > hat", sum(train_resp > train_yhat), "\n")
+    train_mse = sep(true_y = train_resp, pred_y = train_yhat, tau = tau)
+  } else{
+    # Calculating the training MSE
+    train_mse = mean((train_yhat - true_quant)^2)
+  }
+
+  # Including the response and the train_pred in the output list so this can be used for the comparison model
+  train_otpt = list("fpca_obj" = fpca_train$fpca, "cnty_means" = cnty_means, 
+                    "train_mse" = train_mse, "num_used_harm" = num_used_harm, "spline_coefs" = theta_mat,
+                    "train_B" = B_mat, "train_Q2" = Q2_mat, "train_y" = train_resp, "train_pred" = train_pred, "train_etas" = train_est_etas,
+                    "y_diff_train" = train_resp-train_yhat, "train_fit" = train_fit, "train_yhat" = train_yhat)
+  return(train_otpt)
+}
+
+
+
+
+
+
+
+####################################################################################################################################
+
+
+
+
+
+
+
+
+
+
+train_fxn_qr_nopnlty = function(train_fd, train_nonfd, full_fd, use_full_fd4mean = F, sim = F,
+                        nharm = NULL, thresh = 0.80, d = 3, r = 1, 
+                        spat_tri, cntr_fxns = F, DE_MEAN_RESP = T, pred_vars,
+                        true_quant, pnlty = "Ridge", n_lam = 10, train = T, algo = "br", tmpmax_pars, 
+                        tau_val){
+  # This function takes train_fd objects that contains county/year for which there is no data in nonfd
+  # it uses all of it to find principal components, but take the scores and do training only on those that exist
+  # in nonfd. The observations for county/year that are not in nonfd data would have $county NULL
+  # sp_locs: All locations in the spatial domain
+  # train: this variable is for predicting the quantiles which is necessary since calculation is different 
+  # for train and test
+  
+  ###### Calculate the location-specific means of the training data #######
+  fd_cntyIds = c()
+  for (i in 1:length(train_fd)){  # iterate over counties in train fd
+    fd_cntyIds = append(fd_cntyIds, train_fd[[i]]$CountyI)
+  }
+  
+  train_fd_countiesId = unique(fd_cntyIds)
+  
+  if(!sim){
+    train_counties = unique(train_nonfd$county)
+    #print(c("dim nonfd", dim(train_nonfd)))
+    #print(c("num fd unique countyIds", length(train_fd_countiesId), "num nonfd counties", length(train_counties)))
+  }
+  
+  n_knots = nrow(train_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  # Creating matrices to store the county means for the min and max temperatures
+  # so that they can be used for the testing data later on.
+  min.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  max.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  # Setting the names of the columns to the counties
+  colnames(min.mean_mat) = train_fd_countiesId
+  colnames(max.mean_mat) = train_fd_countiesId
+  
+  if(!sim){
+    # Centering each county's coefficients by their means
+    for(i in 1:length(train_fd)){
+      train_cnty_data = train_fd[[i]] # the ith county data
+      #print(summary(train_fd[[i]]$coefs[,,1]))
+      train_cntyId = train_cnty_data$CountyI
+      # calculating the row means for the temperature which is the mean for each
+      # of the spline coefficients
+      cnty_min.mean = apply(train_cnty_data$coefs[,,1], 1, mean)
+      cnty_max.mean = apply(train_cnty_data$coefs[,,2], 1, mean)
+      # Centering the spline coefficients by their location-specific mean
+      train_fd[[i]]$coefs[,,1] = train_cnty_data$coefs[,,1] - cnty_min.mean
+      train_fd[[i]]$coefs[,,2] = train_cnty_data$coefs[,,2] - cnty_max.mean
+      # Adding the means to the matrix
+      min.mean_mat[,as.character(train_cntyId)] = cnty_min.mean
+      max.mean_mat[,as.character(train_cntyId)] = cnty_max.mean
+    }
+  }
+  
+  # Creating a list to store the min and max mean matrices
+  cnty_means = list()
+  cnty_means[[1]] = min.mean_mat
+  cnty_means[[2]] = max.mean_mat
+  
+  # Creating matrices to store the min and max coefficients.
+  # Initializing the matrix by adding the first counties coefficients
+  min.temp_mat = train_fd[[1]]$coefs[,,1]  # after demean
+  max.temp_mat = train_fd[[1]]$coefs[,,2]
+  # Each column of coefs matrix correspond to a year in this county
+  # Use the list of years to exclude to later omit these columns from the scores
+  # given to fit.gsvcm. For each element of the list, take the exld indices
+  # and keep the number of columns in min_temp_mat so far and use to shift the
+  # indices of the next list to exlude
+  if(!sim){
+    exld_scores = train_fd[[1]]$excld_yrs_frm_trn
+    shift_by = ncol(min.temp_mat)
+  }
+  
+  for(j in 2:length(train_fd_countiesId)){
+    min.temp_mat = cbind(min.temp_mat, train_fd[[j]]$coefs[,,1])
+    max.temp_mat = cbind(max.temp_mat, train_fd[[j]]$coefs[,,2])
+    if(!sim){
+      exld_scores = append(exld_scores, (train_fd[[j]]$excld_yrs_frm_trn + shift_by))
+      shift_by = ncol(min.temp_mat)
+    }
+  }
+  #cat("The number of excluded scores is", length(exld_scores), "\n")
+  #print(c("dim min.temp_mat for all fd", dim(min.temp_mat)))
+  ##### Combining the data from ALL counties for FPCA #####
+  comb_arry = array(dim = c(n_knots, dim(min.temp_mat)[2], 2))
+  # Adding the matrices to the array
+  comb_arry[,,1] = min.temp_mat
+  comb_arry[,,2] = max.temp_mat
+  # Creating the fd object that will be used in the FPCA
+  fd_basis_fxns = train_fd[[1]]$basis # the basis fxns are the same for all counties
+  joint_fd_obj = fd(comb_arry, fd_basis_fxns) # creates the "fd" object using the array of coefficients and basis functions.
+  
+  ##### Perform FPCA with the training data ####
+  # Joint FPCA of the smoothed functional data X1 and X2. Since the data is already centered
+  # above, I need to tell the joint.fpca function not to center the data which is why centerfns = F.
+  fpca_train = joint.fpca(joint_fd_obj, nharm = nharm, thresh = thresh, centerfns = cntr_fxns, simulation = sim)
+  
+  if(!sim){
+    # Including an if statement to check if there are excluding scores. 
+    # If the length(exld_scores) == 0, then the command below returns an empty matrix.
+    if(length(exld_scores) > 0){
+      # The if statement is to account for the case where there is only 1 FPC score so the scores is a vector not a matrix
+      if(is.null(dim(fpca_train$pc_scores))) fpc.scores_train = fpca_train$pc_scores[-exld_scores]
+      else fpc.scores_train = fpca_train$pc_scores[-exld_scores,]  # Exclude scores for obs with no nonfd data
+    } else{
+      fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+    }
+  } else{
+    fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+  }
+  
+  # The first condition is only for the case where I give the function a set
+  # number of harmonics, 0,1,2,3..... Otherwise it'll select the nharm based
+  # on the number of columns in fpc.scores_train. The default for nharm is null,
+  # only gets an argument when I don't want to use threshold.
+  if(!is.null(nharm)){
+    num_used_harm = nharm
+  } else if(is.null(ncol(fpc.scores_train))){
+    #print("num scores is 1") 
+    num_used_harm = 1
+  } else{
+    #print("I've entered ncol")
+    num_used_harm = ncol(fpc.scores_train)
+  }
+  
+  ######## Calculating the penalty matrix Omega for the model fitting using its square root decomposition ###########
+  train_basis_full = basis(spat_tri$V, spat_tri$Tr, d = d, r = r, as.matrix(train_nonfd[,c("long","lat")]))
+  Q2_mat = train_basis_full$Q2
+  B_mat = train_basis_full$B
+  Bstar_mat = B_mat%*%Q2_mat
+
+  #### Organizing the data ####
+  # Adding an if condition for simulation since the variable names are different
+  if(!sim){
+    # Organizing the scalar data and the pc scores into one matrix
+    # Adding an if statement to check the number of harmonics. If it's zero, don't include the fpc scores in train_pred
+    if(!is.null(nharm)){ 
+      if(nharm == 0) train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars]))
+      # The else to account for when nharm is greater than 0 but not NULL
+      else train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars], fpc.scores_train))
+    } else{
+      train_pred = as.matrix(cbind(1, train_nonfd[,pred_vars], fpc.scores_train)) # the data for the model
+    }
+    # the response variable
+    if (!DE_MEAN_RESP) train_resp = train_nonfd[,c("Yield")]
+    else train_resp = train_nonfd[,c("de_meaned_Yield")]
+    # Calculating the reparametrized data matrix using the basis functions
+    X_star = as.matrix(kr(train_pred,as.matrix(Bstar_mat), byrow = T))
+  } else{
+    # for simulated data
+    train_pred = as.matrix(cbind(1,train_nonfd[,c("z")], fpc.scores_train))
+    # the response variable
+    train_resp = train_nonfd[,c("y")]
+    # Calculating the reparametrized data matrix using the basis functions
+    X_star = as.matrix(kr(train_pred,as.matrix(Bstar_mat), byrow = T))
+  }
+  
+  ###### Fit the Quantile Regression Model using the predictor variables above ######
+  train_data = data.frame(cbind(train_resp,X_star))
+  colnames(train_data) = c("y", colnames(train_data)[-1])
+  # Adding an if condition for whether this is a sim or real data because of computation in real data
+  if(!sim){
+    ## For real data
+    # Need to use sfn algorithm and adjust tmpmax control variable
+    sX <- as.matrix.csr(X_star)
+    p = ncol(X_star)
+    # original equation for tempmax: 1e5 + exp(-12.1)*(sX@ia[p+1]-1)^2.35
+    #train_fit = rq(y ~ 0 + ., data = train_pred, tau = tau, method = algo)
+    # tmpmax <- floor(tmpmax_pars[1] + exp(tmpmax_pars[2])*(sX@ia[p+1]-1)^tmpmax_pars[3])
+    tmpmax <- floor(tmpmax_pars[1] + exp(tmpmax_pars[2])*(sX@ia[length(sX@ia)]-1)^tmpmax_pars[3])
+    train_fit = rq(y ~ 0 + ., data = train_data, tau = tau_val, method = algo, control = list(tmpmax = tmpmax))
+    #train_fit = rq(y ~ 0 + ., data = train_data, tau = tau_val, method = algo) # using default method = "br"
+  } else{
+    ## Simulation data
+    train_fit = rq(y ~ 0 + ., data = train_data, tau = tau_val, method = algo)
+    # Using rpen with lambda = 0 with Xstar data 
+    #train_fit = rq.pen_new(x = X_star, y = train_resp, tau = tau, penalty = "Ridge", lambda = c(0,0.5), scalex = T, intrcpt = F)
+    # rqPen_xstar$models$tau0.5a0$coefficients[,1]
+    #train_coefs = train_fit$models[[1]][[1]][,1] # 1st col corresponds to lambda = 0
+  }
+  train_coefs = coef(train_fit)
+  # Calculate the coefficient matrix
+  theta_mat = matrix(train_coefs, nrow=dim(Q2_mat)[2], ncol=dim(train_pred)[2])
+  beta_mat = Bstar_mat%*%theta_mat
+  train_yhat = rowSums(train_pred*beta_mat)
+  
+  # Calculating the train MSE which compares the estimated quantiles y_hat to the true.
+  # This is only the case for simulations, otherwise calculate the MSE using the check loss
+  # function
+  if(!sim){
+    # Estimating the training quantiles for real data
+    #train_mse = mean(check(train_resp-train_yhat, tau = tau))
+    train_mse = sep(true_y = train_resp, pred_y = train_yhat, tau = tau_val)
+  } else{
+    # Calculating the training MSE
+    train_mse = mean((train_yhat - true_quant)^2)
+  }
+  
+  # Creating a dataframe with the locations and the error differences
+  if(sim){
+    error_diff_df = data.frame(matrix(NA, nrow = nrow(train_nonfd), ncol = 2))
+    colnames(error_diff_df) = c("CountyI", "diff")
+    error_diff_df[,1] = train_nonfd$CountyI
+    error_diff_df[,2] = (train_yhat - true_quant)^2
+  }
+  
+  # Including the response and the train_pred in the output list so this can be used for the comparison model
+  if(sim){
+    train_otpt = list("fpca_obj" = fpca_train$fpca, "cnty_means" = cnty_means, 
+                      "train_mse" = train_mse, "num_used_harm" = num_used_harm, "spline_coefs" = theta_mat,
+                      "train_B" = B_mat, "train_Q2" = Q2_mat, "train_y" = train_resp, "train_pred" = train_pred,
+                      "error_diff" = error_diff_df,  "train_etas" = beta_mat)
+  } else{
+    train_otpt = list("fpca_obj" = fpca_train$fpca, "cnty_means" = cnty_means, 
+                      "train_mse" = train_mse, "num_used_harm" = num_used_harm, "spline_coefs" = theta_mat,
+                      "train_B" = B_mat, "train_Q2" = Q2_mat, "train_y" = train_resp, "train_pred" = train_pred,
+                      "Xstar" = X_star, "train_yhat" = train_yhat, "train_fit" = train_fit)
+  }
+  
+  return(train_otpt)
+}
+
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+########################################################################################################################################################################################
+
+
+
+train_fxn_multi_qr = function(train_fd, train_nonfd, sim = F, nharm = NULL, thresh = 0.80, d = 3, r = 1, 
+                              spat_tri, cntr_fxns = F, DE_MEAN_RESP = T, pred_vars, true_quant = NULL, tau, 
+                              pnlty = "Ridge", n_lam = 10, train = T, scl = T, tmpmax_pars, algo = "br"){
+  # This function takes train_fd objects that contains county/year for which there is no data in nonfd
+  # it uses all of it to find principal components, but take the scores and do training only on those that exist
+  # in nonfd. The observations for county/year that are not in nonfd data would have $county NULL
+  # sp_locs: All locations in the spatial domain
+  # train: this variable is for predicting the quantiles which is necessary since calculation is different 
+  # for train and test
+  
+  ###### Calculate the location-specific means of the training data #######
+  fd_cntyIds = c()
+  for (i in 1:length(train_fd)){  # iterate over counties in train fd
+    fd_cntyIds = append(fd_cntyIds, train_fd[[i]]$CountyI)
+  }
+  
+  train_fd_countiesId = unique(fd_cntyIds)
+  
+  if(!sim){
+    train_counties = unique(train_nonfd$county)
+    #print(c("dim nonfd", dim(train_nonfd)))
+    #print(c("num fd unique countyIds", length(train_fd_countiesId), "num nonfd counties", length(train_counties)))
+  }
+  
+  n_knots = nrow(train_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  # Creating matrices to store the county means for the min and max temperatures
+  # so that they can be used for the testing data later on.
+  min.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  max.mean_mat = data.frame(matrix(0, nrow = n_knots, ncol = length(train_fd_countiesId)))
+  # Setting the names of the columns to the counties
+  colnames(min.mean_mat) = train_fd_countiesId
+  colnames(max.mean_mat) = train_fd_countiesId
+  
+  if(!sim){
+    # Centering each county's coefficients by their means
+    for(i in 1:length(train_fd)){
+      train_cnty_data = train_fd[[i]] # the ith county data
+      #print(summary(train_fd[[i]]$coefs[,,1]))
+      train_cntyId = train_cnty_data$CountyI
+      # calculating the row means for the temperature which is the mean for each
+      # of the spline coefficients
+      cnty_min.mean = apply(train_cnty_data$coefs[,,1], 1, mean)
+      cnty_max.mean = apply(train_cnty_data$coefs[,,2], 1, mean)
+      # Centering the spline coefficients by their location-specific mean
+      train_fd[[i]]$coefs[,,1] = train_cnty_data$coefs[,,1] - cnty_min.mean
+      train_fd[[i]]$coefs[,,2] = train_cnty_data$coefs[,,2] - cnty_max.mean
+      # Adding the means to the matrix
+      min.mean_mat[,as.character(train_cntyId)] = cnty_min.mean
+      max.mean_mat[,as.character(train_cntyId)] = cnty_max.mean
+    }
+  }
+  
+  # Creating a list to store the min and max mean matrices
+  cnty_means = list()
+  cnty_means[[1]] = min.mean_mat
+  cnty_means[[2]] = max.mean_mat
+  
+  # Creating matrices to store the min and max coefficients.
+  # Initializing the matrix by adding the first counties coefficients
+  min.temp_mat = train_fd[[1]]$coefs[,,1]  # after demean
+  max.temp_mat = train_fd[[1]]$coefs[,,2]
+  # Each column of coefs matrix correspond to a year in this county
+  # Use the list of years to exclude to later omit these columns from the scores
+  # given to fit.gsvcm. For each element of the list, take the exld indices
+  # and keep the number of columns in min_temp_mat so far and use to shift the
+  # indices of the next list to exlude
+  if(!sim){
+    exld_scores = train_fd[[1]]$excld_yrs_frm_trn
+    shift_by = ncol(min.temp_mat)
+  }
+  
+  for(j in 2:length(train_fd_countiesId)){
+    min.temp_mat = cbind(min.temp_mat, train_fd[[j]]$coefs[,,1])
+    max.temp_mat = cbind(max.temp_mat, train_fd[[j]]$coefs[,,2])
+    if(!sim){
+      exld_scores = append(exld_scores, (train_fd[[j]]$excld_yrs_frm_trn + shift_by))
+      shift_by = ncol(min.temp_mat)
+    }
+  }
+  #cat("The number of excluded scores is", length(exld_scores), "\n")
+  #print(c("dim min.temp_mat for all fd", dim(min.temp_mat)))
+  ##### Combining the data from ALL counties for FPCA #####
+  comb_arry = array(dim = c(n_knots, dim(min.temp_mat)[2], 2))
+  # Adding the matrices to the array
+  comb_arry[,,1] = min.temp_mat
+  comb_arry[,,2] = max.temp_mat
+  # Creating the fd object that will be used in the FPCA
+  fd_basis_fxns = train_fd[[1]]$basis # the basis fxns are the same for all counties
+  joint_fd_obj = fd(comb_arry, fd_basis_fxns) # creates the "fd" object using the array of coefficients and basis functions.
+  
+  ##### Perform FPCA with the training data ####
+  # Joint FPCA of the smoothed functional data X1 and X2. Since the data is already centered
+  # above, I need to tell the joint.fpca function not to center the data which is why centerfns = F.
+  fpca_train = joint.fpca(joint_fd_obj, nharm = nharm, thresh = thresh, centerfns = cntr_fxns, simulation = sim)
+  
+  #cat("The of the dimension of the scores is:",dim(fpca_train$pc_scores),"\n")
+  if(!sim){
+    # Including an if statement to check if there are excluding scores. 
+    # If the length(exld_scores) == 0, then the command below returns an empty matrix.
+    if(length(exld_scores) > 0){
+      # The if statement is to account for the case where there is only 1 FPC score so the scores is a vector not a matrix
+      if(is.null(dim(fpca_train$pc_scores))) fpc.scores_train = fpca_train$pc_scores[-exld_scores]
+      else fpc.scores_train = fpca_train$pc_scores[-exld_scores,]  # Exclude scores for obs with no nonfd data
+    } else{
+      fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+    }
+  } else{
+    fpc.scores_train = fpca_train$pc_scores # Exclude scores for obs with no nonfd data
+  }
+  
+  # The first condition is only for the case where I give the function a set
+  # number of harmonics, 0,1,2,3..... Otherwise it'll select the nharm based
+  # on the number of columns in fpc.scores_train. The default for nharm is null,
+  # only gets an argument when I don't want to use threshold.
+  if(!is.null(nharm)){
+    num_used_harm = nharm
+  } else if(is.null(ncol(fpc.scores_train))){
+    #print("num scores is 1") 
+    num_used_harm = 1
+  } else{
+    #print("I've entered ncol")
+    num_used_harm = ncol(fpc.scores_train)
+  }
+  
+  #cat("The number of harmonics used is", num_used_harm,"\n")
+  
+  ######## Calculating the penalty matrix Omega for the model fitting using its square root decomposition ###########
+  train_basis_full = basis(spat_tri$V, spat_tri$Tr, d = d, r = r, as.matrix(train_nonfd[,c("long","lat")]))
+  Q2_mat = train_basis_full$Q2
+  B_mat = train_basis_full$B
+  # Adding a check for dimensions 
+  if(ncol(B_mat) != nrow(Q2_mat)) print("ERROR: dim of B is not the same as dim of Q2")
+  Bstar_mat = B_mat%*%Q2_mat
+  K_mat = train_basis_full$K
+  if(nrow(Q2_mat) != nrow(K_mat)) print("ERROR: dim of B is not the same as dim of Q2")
+  omega_pnlty = t(Q2_mat)%*%K_mat%*%Q2_mat
+  # Changing type to numeric since sqrtm returns complex numbers but in my case it's equivalent to integers
+  #omega_sqrt = sqrtm(omega_pnlty)
+  omega_sqrt = matrix(as.numeric(sqrtm(omega_pnlty)), nr = nrow(omega_pnlty), nc = ncol(omega_pnlty))
+  if(!(max(abs(omega_sqrt%*%omega_sqrt - omega_pnlty)) < 1e-7)) print("ERROR: Square root of Omega is wrong")
+  # print(typeof(omega_sqrt%*%omega_sqrt))
+  # print(typeof(omega_pnlty))
+  # Checking if the transpose of omega_sqrt is equal to itself
+  if(!(max(abs(omega_sqrt - t(omega_sqrt))) < 1e-7)) print("ERROR: Omega not equal Omega^T")
+  omega_sqrt_inv = solve(omega_sqrt, tol = 1e-21)
+  if(!(max(abs(omega_sqrt_inv%*%omega_sqrt - diag(1, nrow = nrow(omega_sqrt), ncol = ncol(omega_sqrt)))) < 1e-7)){
+    print(max(abs(omega_sqrt_inv%*%omega_sqrt - diag(1, nrow = nrow(omega_sqrt), ncol = ncol(omega_sqrt)))))
+    print("ERROR: Inverse of Square Root of Omega is incorrect")
+  }
+  #### Trying to use Cholesky decomposition for the penalty matrix omega instead of sqrt ####
+  #cat("Testing if pos. semi-definite", is.positive.semi.definite(as.matrix(omega_pnlty), tol = 1e-20))
+  # chol_mat_pnlty = as.matrix(chol(omega_pnlty, pivot = TRUE)) # pivot is since matrix is pos. semi-definite
+  # print(chol_mat_pnlty)
+  # cat("Is omega_pnlty symmetric?", zapsmall(omega_pnlty) == zapsmall(t(omega_pnlty)), "|n")
+  # print(attr(chol_mat_pnlty, "pivot"))
+  # pivot = attr(chol_mat_pnlty, "pivot")
+  # cat("The pivot vector is", pivot, "\n")
+  # # Redefining the cholesky matrix using the pivot variable
+  # chol_mat_pnlty_new = chol_mat_pnlty[,order(pivot)]
+  # # Inverse of the cholesky matrix
+  # chol_mat_pnlty_inv = solve(chol_mat_pnlty_new, tol = 1.17e-20)
+  # 
+  #### Organizing the data ####
+  # Adding an if condition for simulation since the variable names are different
+  if(!sim){
+    # Organizing the scalar data and the pc scores into one matrix
+    # Adding an if statement to check the number of harmonics. If it's zero, don't include the fpc scores in train_pred
+    if(!is.null(nharm)){ 
+      if(nharm == 0) train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars]))
+      # The else to account for when nharm is greater than 0 but not NULL
+      else train_pred = as.matrix(cbind(1,train_nonfd[,pred_vars], fpc.scores_train))
+    } else{
+      train_pred = as.matrix(cbind(1, train_nonfd[,pred_vars], fpc.scores_train)) # the data for the model
+    }
+    # the response variable
+    if (!DE_MEAN_RESP) train_resp = train_nonfd[,c("Yield")]
+    else train_resp = train_nonfd[,c("de_meaned_Yield")]
+    # Calculating the reparametrized data matrix using the penalty matrix Omega.
+    # For the rq.pen.cv function, the data matrix type is required to be a numeric matrix.
+    X_tilda = as.matrix(kr(train_pred,as.matrix(Bstar_mat)%*%omega_sqrt_inv, byrow = T))
+  } else{
+    # for simulated data
+    train_pred = as.matrix(cbind(1,train_nonfd[,c("z")], fpc.scores_train))
+    # the response variable
+    train_resp = train_nonfd[,c("y")]
+    # Calculating the reparametrized data matrix using the penalty matrix Omega
+    X_tilda = as.matrix(kr(train_pred,as.matrix(Bstar_mat)%*%omega_sqrt_inv, byrow = T))
+  }
+  
+  ###### Fit the Quantile Regression Model using the predictor variables above ######
+  # intrcpt is set to FALSE here so that the transformation of the coefficients is done correctly
+  train_fit = rq.pen.cv_new(X_tilda, train_resp, penalty = pnlty, nlambda = n_lam, tau = tau, scalex = scl, intrcpt = F)
+  # Obtaining the lambda index corresponding to the lambda that minimimizes the CV error for all values of tau
+  min_cv_lam_ind = train_fit$btr$lambdaIndex
+  # Creating a matrix to store the coefficients for each value of tau. Each column corresponds to a different value of tau
+  train_coefs_mat = matrix(0,nrow = ncol(X_tilda), ncol = length(tau))
+  # Obtaining the coefficients for each value of tau
+  for(i in 1:length(tau)){
+    # Extracting the training coefficients. The first index corresponds to acccessing the list
+    # and the second is the coefs. The reason for this is because the model fit is labeled
+    # by "tau0.5a" where 0.5 is the quantile and this will change so not general enough for other values.
+    train_coefs_mat[,i] = train_fit$fit$models[[i]][[1]][,min_cv_lam_ind[i]]
+  }
+  
+  ##############################################
+  # Calculate the coefficient matrix
+  nr_omega = nrow(omega_sqrt_inv)
+  n_coefs = nrow(train_coefs_mat)
+  # Creating a matrix to store the predicted values for each value of tau
+  yhat_pred_mat = matrix(0, nrow = length(train_resp), ncol = length(tau))
+  # Creating a list for theta_mats. Each element in the list is a theta_mat matrix
+  theta_mat_lst = list()
+  # Creating a vectore to store the prediction error for each tau
+  train_error = c()
+  for(j in 1:length(tau)){
+    # The coefficients for the jth value of tau
+    theta_tilda = matrix(train_coefs_mat[,j], nr = nr_omega, nc = n_coefs/nr_omega)
+    if(ncol(omega_sqrt_inv) != nrow(theta_tilda)) print("ERROR") 
+    theta_mat = omega_sqrt_inv%*%theta_tilda
+    theta_mat_lst[[j]] = theta_mat
+    pred_otpt = predict_svqfm(spline_coefs = theta_mat, Xpred = train_pred,
+                              triang = spat_tri, B = B_mat, Q2 = Q2_mat, train = train)
+    yhat_pred_mat[,j] = pred_otpt$yhat
+    # Calculating the train MSE which compares the estimated quantiles y_hat to the true.
+    # This is only the case for simulations, otherwise calculate the MSE using the check loss
+    # function
+    if(!sim){
+      train_error[j] = sep(true_y = train_resp, pred_y = yhat_pred_mat[,j], tau = tau[j])
+    } else{
+      # Calculating the training MSE
+      ### TODO: Need to change indexing true_quant since in simulation 
+      train_error[j] = mean((yhat_pred_mat[,j] - true_quant[,j])^2)
+    }
+  }
+  # Including the response and the train_pred in the output list so this can be used for the comparison model
+  # train_otpt = list("fpca_obj" = fpca_train$fpca, "cnty_means" = cnty_means, 
+  #                   "train_mse" = train_mse, "num_used_harm" = num_used_harm, "spline_coefs" = theta_mat,
+  #                   "train_B" = B_mat, "train_Q2" = Q2_mat, "train_y" = train_resp, "train_pred" = train_pred, "train_etas" = train_est_etas,
+  #                   "y_diff_train" = train_resp-train_yhat, "train_fit" = train_fit)
+  train_otpt = list("fpca_obj" = fpca_train$fpca, "cnty_means" = cnty_means, 
+                    "train_error" = train_error, "num_used_harm" = num_used_harm, "spline_coefs_list" = theta_mat_lst, "train_Q2" = Q2_mat, 
+                    "train_fit" = train_fit, "train_coefs_mat" = train_coefs_mat, "yhat_pred_mat" = yhat_pred_mat)
+  return(train_otpt)
+}
+
+
+
+
+
+
+
+
+
+
+

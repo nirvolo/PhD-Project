@@ -1,0 +1,453 @@
+---
+title: "heatmaps"
+output: html_document
+date: "2023-10-02"
+---
+```{r}
+# These commands need to be run in the console
+# source("GSVFM/sim_funcs/GSVFM_SimSettings.R")
+# source("GSVFM/app_funcs/agriculture_data_cv.R")
+# This package can convert latex equations to plot names in R
+#install.packages("latex2exp")
+library(latex2exp)
+```
+
+```{r}
+N = 100 # number of time points
+fd_err = sqrt(0.2) # sd of error (functional predictor)
+# Matern corr. fxn parameter that controls rate of decay. Dividing by 111 km since
+# 50 is in kilometer units, not lat and long units. The distance that's calculated
+# in the simulation is between lat and long units.
+phi = 50/111
+# Iterating over the different settings
+yrs = 10 # Change to 10
+flds = 5 # Change to 5
+n_iter = 25 # number of iterations
+SNR = 3.3
+flds = 5
+yrs = 10
+```
+
+```{r}
+# Generating grid points based on the scaled boundaries of Kansas.
+#summary(scl_locs)
+uu = seq(-3.65, 2.5, length.out = 40) # longitude
+vv = seq(-1.45, 1.45, length.out = 40) # latitude
+n1 = length(uu)
+n2 = length(vv)
+u = rep(uu,n2) # repeats the vector uu 10 times
+v = rep(vv,rep(n1,n2)) # repeats each value in vv 10 times
+grid_pts = matrix(c(u,v), nrow = length(u), ncol = 2)
+```
+
+```{r}
+########################## Heat Maps for Linear Functions #########################
+sim_new_otpt_basic = sim_fxn_new(N = N, phi = phi, v = fd_err, sp_locs = scl_locs, years = yrs, n_folds = flds, fld_lim = 1,
+                                 coef_comp = "basic", snr = SNR, comp_model = F, num_iter = 1, spat_corr = T, d = 3, tri_fin = 2,
+                                 models = c("svfm"), reval = c(0,1), log.lam = c(-15.5,-8), family = gaussian())
+# Calculating the estimated coefficients for the grid points based on the training model fit
+basic_sim_fit = sim_new_otpt_basic$svfm
+grid_coefs_basic = coef_fxns(locs = grid_pts, coef = "basic")
+est_coefs_basic = BQ2_grid%*%basic_sim_fit$svfm_fit$theta_hat
+# Heat maps for each of the coefficients. Comparing true and estimated
+for(var in 1:7){
+  par(mfrow = c(1,2))
+  image2D(z = matrix(grid_coefs_basic[,var],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = 
+          "True")
+  # Creating a heatmap for the estimated coefficients based on the grid points
+  image2D(z = matrix(est_coefs_basic[,var], n1, n2), x = uu, y = vv, col = heat.colors(5), contour = T, main =
+          "Estimated")
+}
+```
+
+
+```{r}
+########################## Heat Maps for Complex Functions #########################
+sim_new_otpt_comp = sim_fxn_new(N = N, phi = phi, v = fd_err, sp_locs = scl_locs, years = yrs, n_folds = flds, fld_lim = 1,
+                                 coef_comp = "complex", snr = SNR, comp_model = F, num_iter = 1, spat_corr = T, d = 3, tri_fin = 2,
+                                 models = c("svfm"), reval = c(0,1), log.lam = c(-15.5,-8), family = gaussian())
+# Calculating the estimated coefficients for the grid points based on the training model fit
+comp_sim_fit = sim_new_otpt_comp$svfm
+grid_coefs_comp = coef_fxns(locs = grid_pts, coef = "complex")
+est_coefs_comp = BQ2_grid%*%comp_sim_fit$svfm_fit$theta_hat
+# Heat maps for each of the coefficients. Comparing true and estimated
+for(var in 1:7){
+  par(mfrow = c(1,2))
+  image2D(z = matrix(grid_coefs_comp[,var],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "True")
+  # Creating a heatmap for the estimated coefficients based on the grid points
+  image2D(z = matrix(est_coefs_comp[,var], n1, n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Estimate")
+}
+```
+
+
+```{r}
+#### Creating eigenfunction plots for Kansas ########
+# load("Data_Extraction_cleaning/RdataFiles/NewKansasFromMidw_PreProcRegdat.RData")
+# load("Data_Extraction_cleaning/RdataFiles/NewKansasFromMidw_PreProcFundat.RData")
+ag_data_otpt_new_kns = ag.data_cv.fxn_nopresmooth(fundat_all = kns_fd_new, nonfd = kns_nonfd_new, thresh = 0.95, n_fold = 5, iter = 1, deg = 3, DE_MEAN_RESP = T,
+                                                  pred_vars = c("avgPRCP","irrig_prop"), reval = c(0,1), fld_lim = 1)
+#ag_data_otpt_new_kns$train_fpca$harmonics[i]
+par(mfrow = c(3,2))
+for(i in 1:6){
+  plot(ag_data_otpt_new_kns$train_mod$fpca_obj$harmonics[i], xlab = "time", ylab = "", main = paste("FPC",i), ylim = c(-2,2))
+}
+```
+
+```{r}
+######### Heat maps for the true coefficient functions for Kansas ##########
+#### Generating the grid points
+uu = seq(-3.65, 2.5, length.out = 40) # longitude
+vv = seq(-1.45, 1.45, length.out = 40) # latitude
+n1 = length(uu)
+n2 = length(vv)
+u = rep(uu,n2) # repeats the vector uu 10 times
+v = rep(vv,rep(n1,n2)) # repeats each value in vv 10 times
+grid_pts = matrix(c(u,v), nrow = length(u), ncol = 2)
+# load bivariate basis for the grid pts I generated above
+B0_grid = basis(kns_tri2$V, kns_tri2$Tr, d = 3, r = 1, grid_pts)
+Q2_grid = B0_grid$Q2
+BQ2_grid = as.matrix(B0_grid$B%*%Q2_grid)
+est_coefs_kns = BQ2_grid%*%ag_data_otpt_new_kns$train_mod$svfm_fit$theta_hat
+
+# Heat maps for each of the true coefficients
+par(mfrow = c(2,3))
+# I also don't need the contour line of code, just by adding the argument contour = T for image2D does the job
+# Creating a heatmap for the estimated coefficients based on the grid points
+image2D(z = matrix(est_coefs_kns[,1],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Intercept")
+image2D(z = matrix(est_coefs_kns[,2],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Precipitation")
+image2D(z = matrix(est_coefs_kns[,3],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Irrigation")
+image2D(z = matrix(est_coefs_kns[,4],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Beta 1")
+image2D(z = matrix(est_coefs_kns[,5],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Beta 2")
+image2D(z = matrix(est_coefs_kns[,6],n1,n2), x = uu, y = vv, col = heat.colors(5), contour = T, main = "Beta 3")
+```
+
+
+```{r}
+#### Creating eigenfunction plots for Midwest ########
+# load("Data_Extraction_cleaning/RdataFiles/RawMidwestFundatPreProc_incl_irrig.RData")
+# load("Data_Extraction_cleaning/RdataFiles/RawMidwestRegdatPreProc_incl_irrig.RData")
+# load("Data_Extraction_cleaning/RdataFiles/MidwestScaledTriangulation.RData")
+midw_years = length(unique(midw_regdat_new$Year))
+ag.data.cv_otpt_midw = ag.data_cv.fxn_nopresmooth(fundat_all = midw_fd_new, nonfd = midw_regdat_new,  n_yr = midw_years,
+                                              sp_tri = midw_scl_tri, n_fold = 5, iter = 1, deg = 3, DE_MEAN_RESP = T, 
+                                              pred_vars = c("avgPRCP","irrig_prop"),reval = c(0,1), fld_lim = 1, thresh = 0.90)
+par(mfrow = c(2,3))
+for(i in 1:6){
+  plot(ag.data.cv_otpt_midw$train_mod$fpca_obj$harmonics[i], main = paste("FPC",i), xlab = "time", ylab = "", ylim = c(-2,3))
+}
+```
+
+
+```{r}
+# kns_cnty_data = counties("Kansas",cb = TRUE)
+# kns_cnty_geom = data.frame(kns_cnty_data$geometry[[1]][[1]][[1]])
+# colnames(kns_cnty_geom) = c("long","lat")
+# kns_cnty_geom
+# Extracting the data for the counties
+states <- map_data("state")
+counties <- map_data("county")
+arrests <- USArrests
+usa <-map_data("usa")
+
+# The midwest county data for plotting
+midw_cnty_dat = counties[counties$region %in% c("kansas", "illinois", "indiana", "iowa", "missouri"),]
+# Centering the longitude and latitude based on the center of the midwest
+midw_lon_cent = (min(midw_cnty_dat[,"long"]) + max(midw_cnty_dat[,"long"]))/2
+midw_lat_cent = (min(midw_cnty_dat[,"lat"]) + max(midw_cnty_dat[,"lat"]))/2
+midw_cnty_dat[c("long","lat")] = midw_cnty_dat[,c("long","lat")] - data.frame(matrix(c(midw_lon_cent, midw_lat_cent), nr = nrow(midw_cnty_dat), nc = 2, byrow = T))
+
+
+unique(midw_cnty_dat$order)
+new_dat = data.frame(matrix(c(-100,35, 561, 5, 22001), nr = 1, nc = 4))
+colnames(new_dat) = c("long", "lat", "group", "order")
+
+#dim(counties[counties$region %in% c("kansas", "illinois", "indiana", "iowa", "missouri"),])
+# # For the themes for the plots
+# #install.packages("hrbrthemes")
+# library(ggplot2)
+# library(hrbrthemes)
+
+ggplot(data = midw_cnty_dat, mapping = aes(x = long, y = lat, group = group, fill = order)) +
+  coord_fixed(1.3) + geom_polygon(color="black") + 
+  geom_tile() + 
+  scale_fill_gradient(low="white", high="blue") 
+  # theme_ipsum() +
+  #geom_tile(data = new_dat, mapping = aes(x = long, y = lat, group =fill = order))
+```
+
+```{r}
+# Experimenting with how to add new points to the plot
+ggplot(data = midw_cnty_dat, mapping = aes(x = long, y = lat, group = group)) +
+  coord_fixed(1.3) + geom_polygon(color="black") + 
+  geom_tile(data = new_dat, mapping = aes(x = long, y = lat, fill = order)) + 
+  scale_fill_gradient(low="white", high="blue") 
+  # theme_ipsum() +
+  #geom_tile(data = new_dat, mapping = aes(x = long, y = lat, group =fill = order))
+
+```
+
+
+```{r}
+# The midwest centroids that will be the grid points for the plot
+midw_cent = as.matrix(unique(midw_regdat_new[,c("long","lat")])) # there are 476 counties
+typeof(midw_cent)
+dim(midw_cent)
+B0_midw_cent = basis(midw_scl_tri$V, midw_scl_tri$Tr, d = 3, r = 1, midw_cent)
+Q2_midw_cent = B0_midw_cent$Q2
+BQ2_midw_cent = as.matrix(B0_midw_cent$B%*%Q2_midw_cent)
+# There are 476 coefficients since there are 476 counties. Each row corresponds
+# to a county.
+est_coefs_midw_cent = data.frame(BQ2_midw_cent%*%ag.data.cv_otpt_midw$train_mod$svfm_fit$theta_hat)
+# Adding the centroids to the estimated coefficients matrix
+est_coefs_midw_cent[,c("long","lat")] = midw_cent
+# Adding the county and State
+est_coefs_midw_cent[,c("county","State")] = unique(midw_regdat_new[,c("county","State")])
+head(est_coefs_midw_cent)
+```
+
+```{r}
+#install.packages("rnaturalearthdata")
+library(rnaturalearthdata)
+# Obtaining the county data for the midwest states
+midw_county_poly = counties(state = c("Kansas", "Illinois", "Indiana", "Iowa", "Missouri"), cb = TRUE)
+ggplot(data = midw_county_poly) + geom_sf()
+```
+
+```{r}
+################# ADDING THE ESTIMATED COEFFICIENTS TO THE MIDWEST POLYGON DATA ###############
+# Changing the county name and state name to lower case and removing punctuation so I can compare it with the regdat
+midw_county_poly$NAME = tolower(gsub(" |'|\\.", "", midw_county_poly$NAME))
+midw_county_poly$STATE_NAME = tolower(midw_county_poly$STATE_NAME)
+head(midw_county_poly)
+# I need to add the beta's to the midw_county_poly matrix to make sure that  I can fill according to those variables.
+midw_county_poly[,c("alpha0","alpha1","alpha2", "beta1", "beta2", "beta3", "beta4", "beta5")] = 0
+for(i in 1:nrow(est_coefs_midw_cent)){
+  cnty_coefs = est_coefs_midw_cent[i,]$county
+  state_coefs = est_coefs_midw_cent[i,]$State
+  for(j in 1:nrow(midw_county_poly)){
+    cnty_poly = midw_county_poly[j,]$NAME
+    state_poly = midw_county_poly[j,]$STATE_NAME
+    if(cnty_coefs == cnty_poly & state_coefs == state_poly){
+      # Adding the first 7 columns to midw_county_poly which represent alpha0,alpha1,beta1,.....,beta5
+      midw_county_poly[j,c("alpha0","alpha1","alpha2","beta1", "beta2", "beta3", "beta4", "beta5")] = est_coefs_midw_cent[i,1:8]
+    }
+  }
+}
+```
+
+```{r}
+####################################### CREATING THE HEATMAPS FOR THE TRUE MIDWEST COEFFICIENTS #################
+# I can use grid.arrange(plot1, plot2, ncol=2) so that all plots are side by side 
+library(gridExtra) # for the grid.arrange function
+library(grid) # for the grid.arrange function
+#myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+myPalette <- colorRampPalette(rev(brewer.pal(11, "Spectral")))
+#summary(midw_county_poly)
+# Smallest value for coefs is -85 and largest is 221. To get them all on the same color scale,
+# I need to use the limits argument for the scale_fill_gradient function. I think if I give it (-90,225)
+# it should be fine.
+# Heatmap for alpha0
+alpha0_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = alpha0), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_viridis_b() + 
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha0", limits = c(-86,38)) + 
+  #scale_fill_gradientn(colours = terrain.colors(15), name = "alpha0", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-86,38)) + 
+  labs(x ="Longitude", y = "Latitude") 
+  # theme(plot.title = element_blank(size=14, face="bold"),
+  # axis.title.x = element_blank(size=14, face="bold"),
+  # axis.title.y = element_blank(size=14, face="bold"))
+
+alpha0_htmp
+
+# Heatmap for alpha1
+alpha1_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = alpha1), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_viridis_b() + 
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha1", limits = c(-10,20)) + 
+  #scale_fill_gradientn(colours = terrain.colors(15), name = "alpha1", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-10,20)) + 
+  #labs(title="Precipitation", x ="Longitude", y = "Latitude")
+  labs(x ="Longitude", y = "Latitude")
+
+alpha1_htmp
+
+# Heatmap for alpha2
+alpha2_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = alpha2), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha1", limits = c(-90,225)) +
+  # scale_fill_gradientn(colours = terrain.colors(15), name = "alpha2", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-90,225)) + 
+  #labs(title="Irrigation", x ="Longitude", y = "Latitude")
+  labs(x ="Longitude", y = "Latitude")
+
+alpha2_htmp
+
+# Heatmap for beta1
+beta1_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = beta1), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha1", limits = c(-10,20)) +
+  #scale_fill_gradientn(colours = terrain.colors(15), name = "beta1", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-10,20)) + 
+  #labs(title="Beta 1", x ="Longitude", y = "Latitude")
+  labs(x ="Longitude", y = "Latitude")
+
+beta1_htmp
+
+# Heatmap for beta2
+beta2_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = beta2), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha1", limits = c(-10,20)) +
+  #scale_fill_gradientn(colours = c("blue", "green", "yellow", "red"), name = "beta2", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-10,20)) + 
+  #labs(title="Beta 2", x ="Longitude", y = "Latitude")
+  labs(x ="Longitude", y = "Latitude")
+
+beta2_htmp
+
+# Heatmap for beta3
+beta3_htmp = ggplot(data = midw_county_poly) + 
+  geom_sf(aes(fill = beta3), color = "black") + 
+  #scale_fill_viridis_c(option = "plasma") +
+  #scale_fill_gradient(low = "blue", high = "red", name = "alpha1", limits = c(-10,20)) +
+  #scale_fill_gradientn(colours = c("blue", "green", "yellow", "red"), name = "beta3", limits = c(-90,225)) + 
+  scale_fill_gradientn(colours = myPalette(10), limits = c(-10,20)) + 
+  #labs(title="Beta 3", x ="Longitude", y = "Latitude")
+  labs(x ="Longitude", y = "Latitude")
+
+beta3_htmp
+
+# Arranging the heatmaps side by side
+#grid.arrange(alpha0_htmp, alpha1_htmp, alpha2_htmp, beta1_htmp, beta2_htmp, beta3_htmp, nrow = 3)#ncol=2)
+
+```
+
+
+
+
+
+```{r}
+data <- data.frame(
+  x = 1:10,
+  y = 1:10,
+  z = 1:10
+)
+
+# Basic ggplot with a color scale
+plot <- ggplot(data, aes(x, y, fill = z)) +
+  geom_tile() +
+  scale_fill_gradientn(colours = c("blue", "green", "yellow", "red"))
+
+# Print the plot
+print(plot)
+
+
+```
+
+
+```{r}
+########### Creating heatmap comparing true test y values and predicted y values ###########
+ag_data_otpt_new_kns$
+# The unique locations
+test_locs = 
+unq_locs = unique()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+# meanfd for location 1
+mnfd = fd(best_fit$cnty_means[[1]][,1], best_fit$fpca_eigen$harmonics$basis)
+plot(mnfd)
+```
+
+
+
+
+```{r}
+cmn = array(dim=c(dim(best_fit$cnty_means[[2]]),2))
+cmn[,,1] <- as.matrix(best_fit$cnty_means[[1]])
+cmn[,,2] <- as.matrix(best_fit$cnty_means[[2]])
+mnfd_ = fd(cmn, best_fit$fpca_eigen$harmonics$basis)
+min=2
+loc = 1
+plot(mnfd_[loc,min])
+# plot(best_fit$fpca_eigen$harmonics[,2,])
+# Harmonics scores of location means
+# mn_scrs = inprod.bspline(mnfd_[loc,min], best_fit$fpca_eigen$harmonics[,min,])
+# mn_scrs = proj.mfpca_nv(best_fit$fpca_eigen, mnfd_, cntr = F)
+# dim(mn_scrs)
+# harms = 52
+# mn_loc = mn_scrs[1,1]*best_fit$fpca_eigen$harmonics[1,min,]
+# for (h in 2:harms) {
+#   mn_loc = mn_loc + mn_scrs[1,h]*best_fit$fpca_eigen$harmonics[h,min,]
+# }
+# plot(mn_loc)
+
+# mnfd_[1,2,min]
+# mnfd_[2,1,min]
+
+harms=52
+mn_scrs = proj.mfpca_nv(best_fit$fpca_eigen, mnfd_, cntr = F)
+mn_loc = mn_scrs[loc,1,min]*best_fit$fpca_eigen$harmonics$coefs[,1,min]
+for (h in 2:harms) {
+  mn_loc = mn_loc + mn_scrs[loc,h,min]*best_fit$fpca_eigen$harmonics$coefs[,h,min]
+}
+plot(fd(mn_loc, best_fit$fpca_eigen$harmonics$basis))
+
+harms = 5
+for (h in 2:harms) {
+  mn_loc = mn_loc + mn_scrs[loc,h,min]*best_fit$fpca_eigen$harmonics$coefs[,h,min]
+}
+plot(fd(mn_loc, best_fit$fpca_eigen$harmonics$basis))
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

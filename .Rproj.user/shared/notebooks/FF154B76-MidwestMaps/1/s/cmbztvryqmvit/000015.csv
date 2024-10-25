@@ -1,0 +1,2 @@
+"0","#points(midw_sub[c(24),""long""],midw_sub[c(24),""lat""], pch = 20, cex = 0.6, col = ""blue"")"
+"0","points(midw_cent_df[,""X1""],midw_cent_df[,""X2""], col = ""red"", pch = 20, cex = 0.6)"

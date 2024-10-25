@@ -1,0 +1,246 @@
+test_fxn_qr = function(test_fd, test_nonfd, cnty_means, train_fpca_obj, train_beta_mat, num_harm, cntr_fxns = F, sim = F, DE_MEAN_RESP = T, 
+                       pred_vars = pred_vars, true_quant = NULL, train = F, spline_coefs, train_B, train_Q2, triang, tau){
+  ####### Center the testing data by their location specific means ########
+  # The means for min and max, respectively
+  min_means = cnty_means[[1]]
+  max_means = cnty_means[[2]]
+  ################ BEGIN CHANGE: If it's a simulation, not centering data by location #############
+  if(!sim){
+    # Iterating over all the counties in test_fd
+    for(i in 1:length(test_fd)){
+      # The ith county
+      ##cat(i, "CountyI", test_fd[[i]]$CountyI, "\n")
+      test_cntyId = test_fd[[i]]$CountyI
+      # Centering the data
+      test_fd[[i]]$coefs[,,1] = test_fd[[i]]$coefs[,,1] - unlist(min_means[, as.character(test_cntyId)]) # for min temp - unlist convert to numeric vector (double)
+      test_fd[[i]]$coefs[,,2] = test_fd[[i]]$coefs[,,2] - unlist(max_means[, as.character(test_cntyId)]) # for max temp
+    }
+  }
+  
+  # Combining the data from all the testing counties
+  # Checking if the dimension of the test data is NULL since there might be one observation
+  # for cross-validation and you can't take the dimension of a vector
+  if(is.null(dim(test_fd[[1]]$coefs[,,1]))){
+    n_knots = length(test_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  } else{
+    n_knots = nrow(test_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  }
+  comb_test_arry = array(dim = c(n_knots, dim(test_nonfd)[1], 2))
+  
+  
+  # Creating matrices to store the min and max coefficients.
+  # Initializing the matrix by adding the first counties coefficients
+  min.temp_test = test_fd[[1]]$coefs[,,1]
+  max.temp_test =  test_fd[[1]]$coefs[,,2]
+  for(j in 2:length(test_fd)){
+    # Combining the coefficients for the min and max temp.
+    min.temp_test = cbind(min.temp_test, test_fd[[j]]$coefs[,,1])
+    max.temp_test = cbind(max.temp_test, test_fd[[j]]$coefs[,,2])
+  }
+  # Adding the matrices to the array
+  comb_test_arry[,,1] = min.temp_test
+  comb_test_arry[,,2] = max.temp_test
+  
+  # Creating the fd object that will be used in the FPCA
+  fd.test_basis_fxns = test_fd[[1]]$basis # the basis fxns are the same for all counties
+  joint.test_fd_obj = fd(comb_test_arry, fd.test_basis_fxns) # creates the "fd" object using the array of coefficients and basis functions.
+  
+  ####### Calculate the estimated fpc scores for the test data #########
+  pc_scores.test = proj.mfpca_nv(train_fpca_obj, joint.test_fd_obj, cntr_fxns)$pc_scores[,1:num_harm]
+
+  ####### Constructing the test data matrix for prediction ########
+  # Adding an if condition for simulation since the variable names are different
+  if(!sim){
+    # Data matrix for spatial VCM
+    # Adding an if statement to check if the number of harmonics is zero. If it's zero, don't include scores
+    if(num_harm == 0){
+      test_X = as.matrix(cbind(1, test_nonfd[,pred_vars]))
+    } else{
+      test_X = as.matrix(cbind(1, test_nonfd[,pred_vars], pc_scores.test))
+    }
+    
+    ### RESPONSE_MEAN_CHANGE 4 ###
+    # Add a de_meaned_Yield test_y_demeaned
+    if (!DE_MEAN_RESP) test_y = test_nonfd[,c("Yield")]
+    else test_y = test_nonfd[,c("de_meaned_Yield")]
+    
+  } else{
+    # for simulated data
+    test_X = as.matrix(cbind(1, test_nonfd[,c("z")], pc_scores.test))
+    # the response variable
+    test_y = test_nonfd[,c("y")]
+  }
+  
+  ####### Predict the response variable or all values of the test data  and calculate MSE ######
+  # Predict the estimated test quantiles
+  # test_yhat = predict_svqfm(spline_coefs = spline_coefs, Xpred = test_X, Spred = test_nonfd[,c("long","lat")], 
+  #                           triang = triang, Q2 = train_Q2, train = train)
+  test_otpt = predict_svqfm(spline_coefs = spline_coefs, Xpred = test_X, Spred = test_nonfd[,c("long","lat")], 
+                            triang = triang, Q2 = train_Q2, train = train)
+  test_yhat = test_otpt$yhat
+  
+  ## Splitting up the predicted test values in 4 different regions ##
+  # -8.37700 -4.15675  0.06350  4.28375  8.50400 - the bounds for the 4 regions
+  region_1 = which(test_nonfd$long >= -8.377 & test_nonfd$long < -4.15675)
+  region_2 = which(test_nonfd$long >= -4.15675 &  test_nonfd$long < 0.06350)
+  region_3 = which(test_nonfd$long >= 0.06350 & test_nonfd$long < 4.28375)
+  region_4 = which(test_nonfd$long >= 4.28375 & test_nonfd$long <= 8.50400)
+  cat("The number of obs in region 1 is", length(region_1), "\n")
+  cat("The number of obs in region 2 is", length(region_2), "\n")
+  cat("The number of obs in region 3 is", length(region_3), "\n")
+  cat("The number of obs in region 4 is", length(region_4), "\n")
+  
+  # MSE for the predicted y for test data. MSE is different depending on whether it's a simulation or not
+  if(!sim){
+    # MSE for real data
+    test_mse = sep(true_y = test_y, pred_y = test_yhat, tau = tau)
+    
+    #### Calculating the qep for the 4 different regions #####
+    test_qep_reg1 = sep(true_y = test_y[region_1], pred_y = test_yhat[region_1], tau = tau)
+    test_qep_reg2 = sep(true_y = test_y[region_2], pred_y = test_yhat[region_2], tau = tau)
+    test_qep_reg3 = sep(true_y = test_y[region_3], pred_y = test_yhat[region_3], tau = tau)
+    test_qep_reg4 = sep(true_y = test_y[region_4], pred_y = test_yhat[region_4], tau = tau)
+    
+    test_qep_regions = c(test_qep_reg1, test_qep_reg2, test_qep_reg3, test_qep_reg4)
+    
+  } else{
+    # test QEP for simulation data
+    num_pred = length(test_yhat)
+    sum_y_great_est = sum(test_y > test_yhat)
+    test_mse = (sum_y_great_est/num_pred) - (1-tau)
+  }
+  
+  # Including the response and the train_pred in the output list so this can be used for the comparison model
+  return(list("test_MSE" = test_mse, "test_y" = test_y, "test_pred" = test_X, "test_qep_regions" = test_qep_regions))
+}
+
+
+
+
+
+
+####################################################################################################################################
+
+
+
+
+
+
+
+
+
+
+test_fxn_qr_nopnlty = function(test_fd, test_nonfd, cnty_means, train_fpca_obj, train_beta_mat, num_harm, cntr_fxns = F, sim = F, DE_MEAN_RESP = T, 
+                       pred_vars = pred_vars, true_quant, train = F, spline_coefs, train_B, train_Q2, triang, tau_val, d = 3){
+  ####### Center the testing data by their location specific means ########
+  # The means for min and max, respectively
+  min_means = cnty_means[[1]]
+  max_means = cnty_means[[2]]
+  ################ BEGIN CHANGE: If it's a simulation, not centering data by location #############
+  if(!sim){
+    # Iterating over all the counties in test_fd
+    for(i in 1:length(test_fd)){
+      # The ith county
+      ##cat(i, "CountyI", test_fd[[i]]$CountyI, "\n")
+      test_cntyId = test_fd[[i]]$CountyI
+      # Centering the data
+      test_fd[[i]]$coefs[,,1] = test_fd[[i]]$coefs[,,1] - unlist(min_means[, as.character(test_cntyId)]) # for min temp - unlist convert to numeric vector (double)
+      test_fd[[i]]$coefs[,,2] = test_fd[[i]]$coefs[,,2] - unlist(max_means[, as.character(test_cntyId)]) # for max temp
+    }
+  }
+  
+  # Combining the data from all the testing counties
+  # Checking if the dimension of the test data is NULL since there might be one observation
+  # for cross-validation and you can't take the dimension of a vector
+  if(is.null(dim(test_fd[[1]]$coefs[,,1]))){
+    n_knots = length(test_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  } else{
+    n_knots = nrow(test_fd[[1]]$coefs[,,1]) # the number of knots for the smoothed data
+  }
+  comb_test_arry = array(dim = c(n_knots, dim(test_nonfd)[1], 2))
+  
+  
+  # Creating matrices to store the min and max coefficients.
+  # Initializing the matrix by adding the first counties coefficients
+  min.temp_test = test_fd[[1]]$coefs[,,1]
+  max.temp_test =  test_fd[[1]]$coefs[,,2]
+  for(j in 2:length(test_fd)){
+    # Combining the coefficients for the min and max temp.
+    min.temp_test = cbind(min.temp_test, test_fd[[j]]$coefs[,,1])
+    max.temp_test = cbind(max.temp_test, test_fd[[j]]$coefs[,,2])
+  }
+  # Adding the matrices to the array
+  comb_test_arry[,,1] = min.temp_test
+  comb_test_arry[,,2] = max.temp_test
+  
+  # Creating the fd object that will be used in the FPCA
+  fd.test_basis_fxns = test_fd[[1]]$basis # the basis fxns are the same for all counties
+  joint.test_fd_obj = fd(comb_test_arry, fd.test_basis_fxns) # creates the "fd" object using the array of coefficients and basis functions.
+  
+  ####### Calculate the estimated fpc scores for the test data #########
+  pc_scores.test = proj.mfpca_nv(train_fpca_obj, joint.test_fd_obj, cntr_fxns)$pc_scores[,1:num_harm]
+  
+  ####### Constructing the test data matrix for prediction ########
+  # Adding an if condition for simulation since the variable names are different
+  if(!sim){
+    # Data matrix for spatial VCM
+    # Adding an if statement to check if the number of harmonics is zero. If it's zero, don't include scores
+    if(num_harm == 0){
+      test_X = as.matrix(cbind(1, test_nonfd[,pred_vars]))
+    } else{
+      test_X = as.matrix(cbind(1, test_nonfd[,pred_vars], pc_scores.test))
+    }
+    
+    ### RESPONSE_MEAN_CHANGE 4 ###
+    # Add a de_meaned_Yield test_y_demeaned
+    if (!DE_MEAN_RESP) test_y = test_nonfd[,c("Yield")]
+    else test_y = test_nonfd[,c("de_meaned_Yield")]
+    
+  } else{
+    # for simulated data
+    test_X = as.matrix(cbind(1, test_nonfd[,c("z")], pc_scores.test))
+    # the response variable
+    test_y = test_nonfd[,c("y")]
+  }
+  
+  ####### Predict the response variable or all values of the test data  and calculate MSE ######
+  # Predict the estimated test quantiles
+  V = triang$V; Tr = triang$Tr
+  # The basis functions for the training locations
+  Basis.full = basis(V, Tr, d = d, r = 1, Z = as.matrix(test_nonfd[,c("long","lat")]), Hmtx = FALSE, Kmtx = FALSE)
+  ind.inside.pred = Basis.full$Ind.inside
+  Bpred = Basis.full$B
+  Bstar.pred = Bpred%*%train_Q2
+  Xpred = as.matrix(test_X[ind.inside.pred, ])
+  # Calculating the estimated y values
+  eta = Bstar.pred%*%spline_coefs
+  test_yhat = rowSums(Xpred*eta)
+
+  # MSE for the predicted y for test data. MSE is different depending on whether it's a simulation or not
+  if(!sim){
+    # MSE for real data
+    #test_mse = mean(check(test_y-test_yhat, tau = tau))
+    test_mse = sep(true_y = test_y, pred_y = test_yhat, tau = tau_val)
+  } else{
+    # MSE for simulation data
+    test_mse = mean((true_quant-test_yhat)^2) # regular MSPE
+  }
+  
+  # Creating a dataframe with the locations and the error differences
+  if(sim){
+    error_diff_df = data.frame(matrix(NA, nrow = nrow(test_nonfd), ncol = 2))
+    colnames(error_diff_df) = c("CountyI", "diff")
+    error_diff_df[,1] = test_nonfd$CountyI
+    error_diff_df[,2] = (test_yhat - true_quant)^2
+  }
+  
+  # Including the response and the train_pred in the output list so this can be used for the comparison model
+  if(sim) return(list("test_MSE" = test_mse, "test_y" = test_y, "test_pred" = test_X, "error_diff" = error_diff_df))
+  else return(list("test_MSE" = test_mse, "test_y" = test_y, "test_pred" = test_X))
+}
+
+
+
+
+
+

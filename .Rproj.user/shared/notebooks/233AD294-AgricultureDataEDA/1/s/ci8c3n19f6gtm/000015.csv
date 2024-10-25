@@ -1,0 +1,5 @@
+"0","# Plot of 50 minimum temperature curves"
+"0","par(mfrow = c(1, 1))"
+"0","mean_min = rep(0, 365)"
+"0","plot(NA, xlim = c(1,365), ylim = c(min(temp_df$TMIN),max(temp_df$TMAX)), xlab = ""day"", ylab = ""temperature (C)"", "
+"0","     main = ""Minimum Temperature"") "

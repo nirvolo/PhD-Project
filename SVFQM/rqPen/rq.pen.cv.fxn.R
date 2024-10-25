@@ -1,0 +1,211 @@
+rq.pen.cv_new = function (x, y, tau = 0.5, lambda = NULL, penalty = c("LASSO", 
+                                                      "Ridge", "ENet", "aLASSO", "SCAD", "MCP"), a = NULL, cvFunc = NULL, 
+          nfolds = 10, foldid = NULL, nlambda = 100, groupError = TRUE, 
+          cvSummary = mean, tauWeights = rep(1, length(tau)), printProgress = FALSE, 
+          weights = NULL, intrcpt = F, scalex = T, ...){
+  n <- length(y)
+  if (is.null(foldid)){
+    foldid <- randomly_assign(n, nfolds)
+  }
+  else {
+    nfolds <- length(unique(foldid))
+  }
+  if (is.null(a) == FALSE & (penalty[1] == "LASSO" | penalty[1] == 
+                             "Ridge")) {
+    warning("For Ridge and LASSO the tuning parameter a is ignored")
+  }
+  fit <- rq.pen_new(x, y, tau, lambda = lambda, penalty = penalty, 
+                a = a, nlambda = nlambda, scalex = scalex, intrcpt = intrcpt, ...)
+  nt <- length(tau)
+  na <- length(fit$a)
+  nl <- length(fit$lambda)
+  min_nl <- min(sapply(fit$models, lambdanum))
+  if (min_nl != nl) {
+    warning("Different models had a different number of lambdas. To avoid this set lambda.discard=FALSE. Results presented are for the shortest lambda sequence")
+    for (i in 1:length(fit$models)) {
+      fit$models[[i]] <- clearModels(fit$models[[i]], min_nl)
+    }
+    fit$lambda <- fit$lambda[1:min_nl]
+    nl <- min_nl
+  }
+  if (!groupError) {
+    indErrors <- matrix(rep(0, nt * na * nl), nrow = nl)
+  }
+  foldErrors <- fe2ndMoment <- matrix(rep(0, nt * na * nl), 
+                                      ncol = nl)
+  for (i in 1:nfolds) {
+    if (printProgress) {
+      print(paste("Working on fold", i))
+    }
+    trainidx <- foldid != i
+    testidx <- foldid == i
+    train_x <- x[trainidx, ]
+    train_y <- y[trainidx]
+    train_wts <- weights[trainidx]
+    test_x <- x[testidx, , drop = FALSE]
+    test_y <- y[testidx]
+    test_wts <- weights[testidx]
+    trainModel <- rq.pen_new(train_x, train_y, tau, lambda = fit$lambda, 
+                         penalty = penalty, a = fit$a, lambda.discard = FALSE, 
+                         weights = train_wts, ...)
+    if (is.null(cvFunc)) {
+      testErrors <- check.errors_new(trainModel, test_x, test_y)
+    }
+    else {
+      testErrors <- lapply(predErrors(trainModel, test_x, 
+                                      test_y), cvFunc)
+    }
+    if (is.null(weights) == FALSE) {
+      testErrors <- lapply(testErrors, "*", test_wts)
+    }
+    if (!groupError) {
+      indErrors <- indErrors + sapply(testErrors, apply, 
+                                      2, sum)
+    }
+    foldMeans <- do.call(rbind, lapply(testErrors, apply, 
+                                       2, cvSummary))
+    foldErrors <- foldErrors + foldMeans
+    fe2ndMoment <- fe2ndMoment + foldMeans^2
+  }
+  fe2ndMoment <- fe2ndMoment/nfolds
+  foldErrors <- foldErrors/nfolds
+  stdErr <- sqrt((nfolds/(nfolds - 1)) * (fe2ndMoment - foldErrors^2))
+  tauvals <- sapply(fit$models, modelTau)
+  avals <- sapply(fit$models, modelA)
+  if (groupError) {
+    btr <- byTauResults(foldErrors, tauvals, avals, fit$models, 
+                        stdErr, fit$lambda)
+    gtr <- groupTauResults(foldErrors, tauvals, fit$a, avals, 
+                           fit$models, tauWeights, fit$lambda, stdErr)
+  }
+  else {
+    indErrors <- t(indErrors)/n
+    btr <- byTauResults(indErrors, tauvals, avals, fit$models, 
+                        stdErr, fit$lambda)
+    gtr <- groupTauResults(indErrors, tauvals, fit$a, avals, 
+                           fit$models, tauWeights, fit$lambda, stdErr)
+  }
+  returnVal <- list(cverr = foldErrors, cvse = stdErr, fit = fit, 
+                    btr = btr, gtr = gtr$returnTable, gcve = gtr$gcve, call = match.call())
+  class(returnVal) <- "rq.pen.seq.cv"
+  returnVal
+}
+
+######################################################################################################################################################
+
+rq.pen_new <- function (x, y, tau = 0.5, lambda = NULL, penalty = c("LASSO", 
+                                                      "Ridge", "ENet", "aLASSO", "SCAD", "MCP"), a = NULL, nlambda = 100, 
+          eps = ifelse(nrow(x) < ncol(x), 0.05, 0.01), penalty.factor = rep(1, ncol(x)), alg = c("huber", "br", "QICD", "fn"), scalex = TRUE, 
+          tau.penalty.factor = rep(1, length(tau)), coef.cutoff = 1e-08, 
+          max.iter = 10000, converge.eps = 1e-07, lambda.discard = TRUE, 
+          weights = NULL, intrcpt = F, ...){
+  penalty <- match.arg(penalty)
+  alg <- match.arg(alg)
+  if (length(y) != nrow(x)) {
+    stop("length of x and number of rows in x are not the same")
+  }
+  if (is.null(weights) == FALSE) {
+    if (penalty == "ENet" | penalty == "Ridge") {
+      stop("Cannot use weights with elastic net or ridge penalty. Can use it with lasso, though may be much slower than unweighted version.")
+    }
+    if (penalty == "aLASSO") {
+      warning("Weights are ignored when getting initial (Ridge) estimates for adaptive Lasso")
+    }
+    if (length(weights) != length(y)) {
+      stop("number of weights does not match number of responses")
+    }
+    if (sum(weights <= 0) > 0) {
+      stop("all weights most be positive")
+    }
+  }
+  if (is.matrix(y) == TRUE) {
+    y <- as.numeric(y)
+  }
+  if (min(penalty.factor) < 0 | min(tau.penalty.factor) < 0) {
+    stop("Penalty factors must be non-negative.")
+  }
+  if (sum(penalty.factor) == 0 | sum(tau.penalty.factor) == 
+      0) {
+    stop("Cannot have zero for all entries of penalty factors. This would be an unpenalized model")
+  }
+  if (scalex) {
+    x <- scale(x, center = F)
+  }
+  if (penalty == "LASSO") {
+    fit <- rq.lasso(x, y, tau, lambda, nlambda, eps, penalty.factor, 
+                    alg, scalex = FALSE, tau.penalty.factor, coef.cutoff, 
+                    max.iter, converge.eps, lambda.discard = lambda.discard, 
+                    weights = weights, ...)
+  }
+  else if (penalty == "Ridge") {
+    if (alg != "huber") {
+      stop("huber alg is only option for Ridge penalty")
+    }
+    fit <- rq.enet_new(x, y, tau, lambda, nlambda, eps, penalty.factor, 
+                   scalex = FALSE, tau.penalty.factor, a = 0, max.iter, 
+                   converge.eps, lambda.discard = lambda.discard, ...)
+  }
+  else if (penalty == "ENet") {
+    if (alg != "huber") {
+      stop("huber alg is only option for ENet penalty")
+    }
+    if (is.null(a)) {
+      stop("Specify a value for a for ENet penalty")
+    }
+    fit <- rq.enet(x, y, tau, lambda, nlambda, eps, penalty.factor, 
+                   scalex = FALSE, tau.penalty.factor, a, max.iter, 
+                   converge.eps, gamma, lambda.discard = lambda.discard, 
+                   ...)
+  }
+  else if (penalty == "aLASSO" | penalty == "SCAD" | penalty == 
+           "MCP") {
+    fit <- rq.nc(x, y, tau, penalty, a, lambda, nlambda = nlambda, 
+                 eps = eps, penalty.factor = penalty.factor, alg = alg, 
+                 scalex = FALSE, tau.penalty.factor = tau.penalty.factor, 
+                 coef.cutoff = coef.cutoff, max.iter = max.iter, converge.eps = converge.eps, 
+                 lambda.discard = lambda.discard, weights = weights, 
+                 ...)
+  }
+  # Adding an argument here for the intercept since the tranform_coefs fxn assumes an
+  # intercept by default and this could possibly affect the results when transforming 
+  # the coefficients back to the original scale
+  if (scalex) {
+    for (i in 1:length(fit$models)) {
+      if (!is.null(dim(fit$models[[i]]$coefficients))) {
+        fit$models[[i]]$coefficients <- apply(fit$models[[i]]$coefficients, 
+                                              2, transform_coefs, attributes(x)$`scaled:center`, 
+                                              attributes(x)$`scaled:scale`, intrcpt)
+      }
+      else {
+        fit$models[[i]]$coefficients <- transform_coefs(fit$models[[i]]$coefficients, 
+                                                        attributes(x)$`scaled:center`, attributes(x)$`scaled:scale`,
+                                                        intrcpt)
+      }
+    }
+  }
+  if (lambda.discard) {
+    lmin <- min(sapply(fit$models, lambdanum))
+    fit$lambda <- fit$lambda[1:lmin]
+    for (j in 1:length(fit$models)) {
+      fit$models[[j]]$coefficients <- fit$models[[j]]$coefficients[,1:lmin]
+      fit$models[[j]]$rho <- fit$models[[j]]$rho[1:lmin]
+      fit$models[[j]]$PenRho <- fit$models[[j]]$PenRho[1:lmin]
+      fit$models[[j]]$nzero <- fit$models[[j]]$nzero[1:lmin]
+    }
+  }
+  fit$weights <- weights
+  fit$call <- match.call()
+  fit
+}
+
+
+
+
+
+
+
+
+
+
+
+

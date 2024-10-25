@@ -1,0 +1,8 @@
+"0","# Calculating the variance "
+"0","var_min = rep(0, 9)"
+"0","var_max = rep(0, 9)"
+"0","for(i in 1:9){"
+"0","  id = unique(fun99_new$CountyI)[i]"
+"0","  var_min[i] = var(fun99_new[fun99_new$CountyI == id, c(""TMIN"")])"
+"0","  var_max[i] = var(fun99_new[fun99_new$CountyI == id, c(""TMAX"")])"
+"0","}"

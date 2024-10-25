@@ -1,0 +1,2 @@
+"0","# boxplot of the maximum temperatures"
+"0","boxplot(TMAX ~ county, data = fun99_new[fun99_new$CountyI <= 18,], ylab = 'Max Temp', xlab = ""County"", main = ""Max Temp vs. County"")"

@@ -1,0 +1,4 @@
+"0","##### Working only with 1999 data #####"
+"0","# Counties included in 1999"
+"0","reg99 = corn[corn$Year == 1999,]"
+"0","reg99"
