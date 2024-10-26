@@ -1,2 +1,5 @@
-Data_Extraction_cleaning/
+Data_Extraction_cleaning/ExcelDataFiles
+Data_Extraction_cleaning/RdataFiles
+.DS_Store
+README.html
 
