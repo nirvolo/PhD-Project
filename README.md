@@ -23,11 +23,11 @@ The results for the bootstrap hypothesis test can be found in the files titled "
 ### SVFQM
 The SVFQM folder contains all the necessary code to run the SVFQM for both simulations and real data. The main functions can be found in the folders "sim_funcs","app_funcs", and "util_funcs". The rqPen package is used to fit the SVFQM but there are some changes that are made to the original functions. These updated functions can be found under the "rqPen" folder. The files "KansasQuantRegRes.R", "MidwestQuantRegResults.R", and "SimTrialsQuantReg.R" contain the results for the real data and simulations.
 
-### common_util
+### common_utils
 This folder contains files that are used throughout both projects. One of the main files which is necessary for both projects is the "preprocessing_function.R". This contains the code that processes the functional and non-functional data before model fitting. The files "KansasMaps.Rmd" and "MidwestMaps.Rmd" contain the code for obtaining the county centroids and construction of the triangulation. The file "AgricultureDataEDA.Rmd" includes some exploratory data analysis that is performed for the agriculture data.
 
-### Data_Extraction
-This folder contains the code that is used for extracting the temperature data from the servers and the preprocessing of this data and the agriculture data.
+### Data_Extraction_cleaning
+This folder contains the code that is used for extracting the temperature data from the servers and the preprocessing of this data and the agriculture data. The preprocessing uses certain excel files which can be found under "ExcelDataFiles". Under RdataFiles, there are essential RData files for the real data that are used for the model fitting.
 
 
 
